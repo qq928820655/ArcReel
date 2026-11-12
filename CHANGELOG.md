@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.37.0](https://github.com/ArcReel/ArcReel/compare/v0.36.0...v0.37.0) (2026-11-12)
+
+
+### ✨ 新功能
+
+* **catalog:** record accepted image quality values on catalog entries ([bb336c4](https://github.com/ArcReel/ArcReel/commit/bb336c42e62e8d123c69d4c5c19c22c0a15c0b0f)), closes [#3767](https://github.com/ArcReel/ArcReel/issues/3767)
+* **config:** treat builtin provider defaults as recommendations only ([9242e0e](https://github.com/ArcReel/ArcReel/commit/9242e0e48619e926b2de1e8df1a1f939d01a229d)), closes [#3761](https://github.com/ArcReel/ArcReel/issues/3761)
+* **image:** send the project's chosen image quality separately from resolution ([bcc8eb4](https://github.com/ArcReel/ArcReel/commit/bcc8eb42ace069dd56dfa4abf2c39904682431e7)), closes [#3770](https://github.com/ArcReel/ArcReel/issues/3770)
+* **settings:** choose image quality per project and flag stale resolution and quality ([ad62ec8](https://github.com/ArcReel/ArcReel/commit/ad62ec8e88697778e56a2128ff834f35d8b4f970)), closes [#3771](https://github.com/ArcReel/ArcReel/issues/3771)
+
+
+### 🐛 Bug 修复
+
+* **archive:** clean failed export snapshots immediately ([9aaa45c](https://github.com/ArcReel/ArcReel/commit/9aaa45c7dc79301935a99cb5cea1cad601fc4fe7)), closes [#3756](https://github.com/ArcReel/ArcReel/issues/3756)
+* **archive:** preserve referenced content during import repair ([793db95](https://github.com/ArcReel/ArcReel/commit/793db959f2da83b5f8aded01b5c813749b4de310)), closes [#3758](https://github.com/ArcReel/ArcReel/issues/3758)
+* **catalog:** rebuild cached image backends after official catalog sync ([6f2fffc](https://github.com/ArcReel/ArcReel/commit/6f2fffca7d4aef421cc6ec12809ca049c1e257f6)), closes [#3780](https://github.com/ArcReel/ArcReel/issues/3780)
+* **config:** keep each instance's pre-upgrade models when defaults become recommendations ([10ab99d](https://github.com/ArcReel/ArcReel/commit/10ab99d0d18817143471f4ce1c56a6cf66ba0da3))
+* **planning:** constrain speakers by reference audio limit ([afa75a7](https://github.com/ArcReel/ArcReel/commit/afa75a70c318aac58372c57d44026bbe6e28d8fe)), closes [#3754](https://github.com/ArcReel/ArcReel/issues/3754)
+* **planning:** gate speaker limit on the native voice tier ([2f7a833](https://github.com/ArcReel/ArcReel/commit/2f7a833fd92690a0cc37df4cca66d13b0d5ba4cc)), closes [#3754](https://github.com/ArcReel/ArcReel/issues/3754)
+* **usage:** match failure detail wording with task reasons ([55b2017](https://github.com/ArcReel/ArcReel/commit/55b20174df35a1d637910826ee3cccbe2004e74d)), closes [#3755](https://github.com/ArcReel/ArcReel/issues/3755) [#3748](https://github.com/ArcReel/ArcReel/issues/3748)
+* **usage:** preserve and localize media failure details ([a2e7a02](https://github.com/ArcReel/ArcReel/commit/a2e7a02a33e16796c6a546bbb796f901b41de0a5)), closes [#3748](https://github.com/ArcReel/ArcReel/issues/3748)
+* **versions:** protect rollback targets during video finalization ([34f21b3](https://github.com/ArcReel/ArcReel/commit/34f21b3120c3b2cb9d5dde42461f308da181db6e)), closes [#3755](https://github.com/ArcReel/ArcReel/issues/3755)
+
 ## [0.36.0](https://github.com/ArcReel/ArcReel/compare/v0.35.0...v0.36.0) (2026-11-10)
 
 
