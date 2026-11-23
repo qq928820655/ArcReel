@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type CSSProperties, type PointerEvent, type WheelEvent } from "react";
+import { useCallback, useRef, useState, type PointerEvent, type WheelEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { ImageOff, ZoomIn, ZoomOut } from "lucide-react";
 import { cn } from "cn";
@@ -60,16 +60,25 @@ export function ZoomableImage({
   compact?: boolean;
 }) {
   const { t } = useTranslation("assets");
+  // 已提交的倍率与位移：只在手势结束、按钮、滚轮停顿时更新，驱动按钮禁用与光标样式
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
   // 加载失败就显示占位，不让上一张的残留冒充当前这张
   const [failed, setFailed] = useState(false);
+  // 手势期间的实时值。逐帧 setState 会让整块面板跟着重渲染，改由它 + 直写 DOM 承载。
+  const view = useRef({ zoom: 1, pan: { x: 0, y: 0 } });
+  const imageRef = useRef<HTMLImageElement>(null);
+  const readoutRef = useRef<HTMLSpanElement>(null);
+  const wheelCommit = useRef<number | null>(null);
+  // 手势期间的写入按帧合并：触摸事件的频率高于刷新率，逐事件写会做多余的样式重算
+  const frame = useRef<number | null>(null);
   // 拖动与捏合都基于手势开始时的状态累加，避免逐帧读取会抖动的当前值。
   const gesture = useRef<Gesture | null>(null);
   const activePointers = useRef(new Map<number, Point>());
 
-  // 换图时归位，否则上一张的倍率会套到新图上。按 src 记住已归位的那张，
-  // 用渲染期比较代替 effect 里的 setState。
+  // 换图时归位：调用处用 key={src} 重挂载，本组件的 state 与 ref 自然从初值开始。
+  // 这里不再用「渲染期比较 + setState」兜底——渲染期写 ref 被 lint 拦下，
+  // 而 key 重挂载已经覆盖了换图场景。
   const [settledSrc, setSettledSrc] = useState(src);
   if (settledSrc !== src) {
     setSettledSrc(src);
@@ -80,16 +89,56 @@ export function ZoomableImage({
 
   const clampZoom = (value: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
 
+  // 把 view.current 落到 DOM。CSS 变量挂在 img 上，倍率读数改 textContent。
+  const flushView = useCallback(() => {
+    frame.current = null;
+    const image = imageRef.current;
+    if (image) {
+      const { zoom: z, pan: p } = view.current;
+      image.style.setProperty("--zoom", String(z));
+      image.style.setProperty("--pan-x", `${p.x}px`);
+      image.style.setProperty("--pan-y", `${p.y}px`);
+    }
+    if (readoutRef.current) readoutRef.current.textContent = `${Math.round(view.current.zoom * 100)}%`;
+  }, []);
+
+  // 直写 DOM 的入口。手势里同步改 view.current，真正的样式写入按帧合并——
+  // 触摸事件比刷新率密，逐事件写 CSS 变量会让浏览器做多余的样式与绘制。
+  const writeView = useCallback((nextZoom: number, nextPan: Point, immediate = false) => {
+    view.current = { zoom: nextZoom, pan: nextPan };
+    if (immediate) {
+      if (frame.current !== null) cancelAnimationFrame(frame.current);
+      flushView();
+      return;
+    }
+    if (frame.current === null) frame.current = requestAnimationFrame(flushView);
+  }, [flushView]);
+
+  // 手势结束把实时值交给 React，让按钮禁用、光标与布局跟上；
+  // 同时摘掉低采样标记，放大后的画面按高质量重新画一次。
+  const commitView = useCallback(() => {
+    if (frame.current !== null) {
+      cancelAnimationFrame(frame.current);
+      flushView();
+    }
+    imageRef.current?.removeAttribute("data-gesturing");
+    setZoom(view.current.zoom);
+    setPan(view.current.pan);
+  }, [flushView]);
+
   const applyZoom = useCallback((nextZoom: number) => {
     const clamped = clampZoom(nextZoom);
-    setZoom(clamped);
     // 回到适应容器时清掉位移，图重新居中
-    if (clamped === MIN_ZOOM) setPan({ x: 0, y: 0 });
-  }, []);
+    writeView(clamped, clamped === MIN_ZOOM ? { x: 0, y: 0 } : view.current.pan, true);
+    commitView();
+  }, [commitView, writeView]);
 
   const distanceBetween = (points: Point[]) => Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
 
   const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    // 手势期间换低成本的放大采样：默认的高质量重采样在大图上每次重算要数百毫秒到数秒，
+    // 松手后由 commitView 去掉标记恢复画质。attribute 而非 state，避免触发重渲染。
+    imageRef.current?.setAttribute("data-gesturing", "");
     activePointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
     // 捕获指针，手指滑出舞台也能继续拖动；环境不支持时（旧浏览器、测试环境）退化为不捕获
     event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -97,8 +146,8 @@ export function ZoomableImage({
     if (points.length === 2) {
       gesture.current = {
         startDistance: distanceBetween(points),
-        startZoom: zoom,
-        startPan: pan,
+        startZoom: view.current.zoom,
+        startPan: view.current.pan,
         startPoint: points[0],
         startPoints: points.map((point) => ({ ...point })),
         mode: "none",
@@ -107,8 +156,8 @@ export function ZoomableImage({
     } else if (points.length === 1) {
       gesture.current = {
         startDistance: 0,
-        startZoom: zoom,
-        startPan: pan,
+        startZoom: view.current.zoom,
+        startPan: view.current.pan,
         startPoint: points[0],
         startPoints: [{ ...points[0] }],
         mode: "none",
@@ -135,17 +184,17 @@ export function ZoomableImage({
         start.mode = parallel > opposite * GESTURE_DOMINANCE ? "swipe" : "pinch";
       }
       if (start.mode === "pinch") {
-        applyZoom(start.startZoom * ratio);
+        writeView(clampZoom(start.startZoom * ratio), view.current.pan);
         return;
       }
       // 横滑切图只在适应容器时生效；放大后双指横移仍用于平移
-      if (zoom > MIN_ZOOM) return;
+      if (view.current.zoom > MIN_ZOOM) return;
       start.swipeDx = midX(points) - midX(start.startPoints);
       return;
     }
     // 单指拖动：只在放大后平移，适应容器时保持居中
-    if (zoom > MIN_ZOOM) {
-      setPan({
+    if (view.current.zoom > MIN_ZOOM) {
+      writeView(view.current.zoom, {
         x: start.startPan.x + (points[0].x - start.startPoint.x),
         y: start.startPan.y + (points[0].y - start.startPoint.y),
       });
@@ -161,11 +210,13 @@ export function ZoomableImage({
     if (start?.mode === "swipe") {
       const dx = start.swipeDx;
       gesture.current = points.length > 0
-        ? { startDistance: 0, startZoom: zoom, startPan: pan, startPoint: points[0], startPoints: [{ ...points[0] }], mode: "none", swipeDx: 0 }
+        ? { startDistance: 0, startZoom: view.current.zoom, startPan: view.current.pan, startPoint: points[0], startPoints: [{ ...points[0] }], mode: "none", swipeDx: 0 }
         : null;
       if (Math.abs(dx) >= SWIPE_TRIGGER) onSwipe?.(dx < 0 ? "next" : "prev");
       return;
     }
+    // 手势收尾：把这一程的倍率与位移提交给 React
+    commitView();
     if (points.length === 0) {
       gesture.current = null;
       return;
@@ -173,8 +224,8 @@ export function ZoomableImage({
     // 从双指松到单指：以当前状态重新起算，否则残留的捏合基准会让图乱跳
     gesture.current = {
       startDistance: 0,
-      startZoom: zoom,
-      startPan: pan,
+      startZoom: view.current.zoom,
+      startPan: view.current.pan,
       startPoint: points[0],
       startPoints: [{ ...points[0] }],
       mode: "none",
@@ -186,7 +237,14 @@ export function ZoomableImage({
     // 触控板双指滚动也走 wheel：Ctrl 键按下或直接滚动都按缩放处理，避免整层被页面滚走
     event.preventDefault();
     const factor = event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
-    applyZoom(zoom * factor);
+    const clamped = clampZoom(view.current.zoom * factor);
+    writeView(clamped, clamped === MIN_ZOOM ? { x: 0, y: 0 } : view.current.pan);
+    // 滚轮是连续事件：停手后才提交一次，避免每个事件触发一轮渲染
+    if (wheelCommit.current !== null) window.clearTimeout(wheelCommit.current);
+    wheelCommit.current = window.setTimeout(() => {
+      wheelCommit.current = null;
+      commitView();
+    }, 160);
   };
 
   const zoomed = zoom > MIN_ZOOM;
@@ -211,6 +269,7 @@ export function ZoomableImage({
           <ImageOff aria-hidden className="size-10 text-muted-foreground" />
         ) : (
           <img
+            ref={imageRef}
             src={src}
             alt={alt}
             draggable={false}
@@ -222,7 +281,8 @@ export function ZoomableImage({
             }}
             onError={() => setFailed(true)}
             className={cn("max-h-full max-w-full object-contain select-none pan-zoom", className)}
-            style={{ "--zoom": zoom, "--pan-x": `${pan.x}px`, "--pan-y": `${pan.y}px` } as CSSProperties}
+            // 初始值由 React 给；手势期间由 writeView 直接改，松手后两者一致
+            style={{ "--zoom": zoom, "--pan-x": `${pan.x}px`, "--pan-y": `${pan.y}px` } as React.CSSProperties}
           />
         )}
       </div>
@@ -230,7 +290,7 @@ export function ZoomableImage({
           全屏看图（compact）不显示按钮行，倍率读数浮在右下角。 */}
       {compact ? (
         zoomed && (
-          <span className="pointer-events-none absolute bottom-2 right-2 rounded-md bg-background/80 px-2 py-0.5 text-xs text-subtle-foreground tabular-nums">
+          <span ref={readoutRef} className="pointer-events-none absolute bottom-2 right-2 rounded-md bg-background/80 px-2 py-0.5 text-xs text-subtle-foreground tabular-nums">
             {Math.round(zoom * 100)}%
           </span>
         )
@@ -245,7 +305,7 @@ export function ZoomableImage({
         >
           <ZoomOut aria-hidden />
         </Button>
-        <span className="min-w-12 text-center text-xs text-subtle-foreground tabular-nums">
+        <span ref={readoutRef} className="min-w-12 text-center text-xs text-subtle-foreground tabular-nums">
           {Math.round(zoom * 100)}%
         </span>
         <Button

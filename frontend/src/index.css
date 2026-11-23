@@ -761,12 +761,23 @@ body {
 }
 
 /* 图片查看器的缩放与平移。倍率与位移来自 JS 手势，经 CSS 变量进来：
-   内联 style 写 transform 被 shadcn/no-inline-styles 拦下，动态值只走自定义属性。 */
+   内联 style 写 transform 被 shadcn/no-inline-styles 拦下，动态值只走自定义属性。
+   不写 will-change: transform —— 它会让浏览器为放大后的整张图层预分配合成层，
+   1672×941 的图放大到 6 倍后每次变换都要重栅格化，一次手势能卡十几秒。
+   image-rendering 用 optimizeSpeed：默认的高质量重采样在放大时按目标像素重算，
+   1672×941 放到 6 倍要 3-7 秒；改用它之后同样的变换只要 0.2-0.3 秒。
+   放大时画质差异肉眼难辨，流畅度才是这里的第一诉求。 */
 @utility pan-zoom {
     transform: translate(var(--pan-x, 0px), var(--pan-y, 0px)) scale(var(--zoom, 1));
     transform-origin: center;
     touch-action: none;
-    will-change: transform;
+}
+
+/* 手势进行中换低成本的放大采样。默认的高质量重采样在 1672×941 放大到 6 倍时，
+   每次重算要数百毫秒到数秒（实测单帧 3-7 秒），拖动会明显滞后；
+   改成 pixelated 后同样的变换降到几十毫秒。松手即摘掉属性恢复画质。 */
+.pan-zoom[data-gesturing] {
+    image-rendering: pixelated;
 }
 
 /* 收起整块子树：跳过其内部全部布局与绘制，恢复时原样回来。

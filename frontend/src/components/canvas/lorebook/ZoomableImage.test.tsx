@@ -19,6 +19,11 @@ function zoomPercent() {
   return screen.getByText(/%$/).textContent;
 }
 
+/** 等一个动画帧：手势期间的 CSS 变量写入按帧合并。 */
+function nextFrame() {
+  return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+}
+
 describe("ZoomableImage", () => {
   it("starts fitted to the container and reports the natural size once loaded", () => {
     const { image, onNaturalSize } = renderImage();
@@ -57,21 +62,26 @@ describe("ZoomableImage", () => {
     expect(screen.getByRole("button", { name: "放大" })).toBeDisabled();
   });
 
-  it("zooms on wheel and reports the ratio", () => {
+  it("zooms on wheel and reports the ratio", async () => {
     const { stage } = renderImage();
 
+    // 滚轮是连续事件，读数按帧合并，等一帧再断言
     fireEvent.wheel(stage, { deltaY: -100 });
+    await nextFrame();
     expect(zoomPercent()).toBe("150%");
     fireEvent.wheel(stage, { deltaY: 100 });
+    await nextFrame();
     expect(zoomPercent()).toBe("100%");
   });
 
-  it("pans only after zooming in", () => {
+  it("pans only after zooming in", async () => {
     const { stage, image } = renderImage();
 
     // 适应容器时拖动不产生位移
     fireEvent.pointerDown(stage, { pointerId: 1, clientX: 0, clientY: 0 });
     fireEvent.pointerMove(stage, { pointerId: 1, clientX: 40, clientY: 30 });
+    // 手势期间的写入按帧合并，等一帧再看
+    await nextFrame();
     expect(image.style.getPropertyValue("--pan-x")).toBe("0px");
     fireEvent.pointerUp(stage, { pointerId: 1, clientX: 40, clientY: 30 });
 
@@ -79,6 +89,7 @@ describe("ZoomableImage", () => {
     fireEvent.wheel(stage, { deltaY: -100 });
     fireEvent.pointerDown(stage, { pointerId: 1, clientX: 0, clientY: 0 });
     fireEvent.pointerMove(stage, { pointerId: 1, clientX: 40, clientY: 30 });
+    await nextFrame();
     expect(image.style.getPropertyValue("--pan-x")).toBe("40px");
     expect(image.style.getPropertyValue("--pan-y")).toBe("30px");
   });
