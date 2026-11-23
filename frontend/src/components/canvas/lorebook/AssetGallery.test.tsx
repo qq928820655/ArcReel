@@ -523,15 +523,15 @@ describe("AssetGallery", () => {
       renderGallery();
       const viewer = await openViewer(user, "庭院");
       const current = within(viewer).getByRole("img", { name: "「庭院」的资产图，第 2 版" });
-      // 大图区域（版本条另有缩略图）
-      const stage = current.closest("span")?.parentElement as HTMLElement;
       fireEvent.load(current);
 
       await user.click(await within(viewer).findByRole("button", { name: "第 1 版" }));
       fireEvent.error(within(viewer).getByRole("img", { name: "「庭院」的资产图，第 1 版" }));
 
       // 第 1 版读不出来：显示占位，不能让第 2 版的画面冒充第 1 版
-      expect(stage.querySelector("img")).toBeNull();
+      // 换版本会重挂载看图区，切换后重新取元素
+      const stage = within(viewer).getByRole("group", { name: "资产图缩放区域" });
+      await waitFor(() => expect(stage.querySelector("img")).toBeNull());
     });
 
     it("keeps the restore unavailable while the asset image is being generated", async () => {

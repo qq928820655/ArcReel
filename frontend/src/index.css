@@ -760,6 +760,15 @@ body {
     contain-intrinsic-size: auto 600px;
 }
 
+/* 图片查看器的缩放与平移。倍率与位移来自 JS 手势，经 CSS 变量进来：
+   内联 style 写 transform 被 shadcn/no-inline-styles 拦下，动态值只走自定义属性。 */
+@utility pan-zoom {
+    transform: translate(var(--pan-x, 0px), var(--pan-y, 0px)) scale(var(--zoom, 1));
+    transform-origin: center;
+    touch-action: none;
+    will-change: transform;
+}
+
 /* Markdown 正文（StreamMarkdown）。颜色只引用语义 token。代码块与表格由 Streamdown 外包一层
    滚动容器，pre 与 table 自身不滚动，键盘聚焦与横向滚动都落在那一层（见 StreamMarkdown）。 */
 @utility markdown-body {

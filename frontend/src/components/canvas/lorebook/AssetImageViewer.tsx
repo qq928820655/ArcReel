@@ -1,9 +1,8 @@
 import { useEffect, useId, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, ChevronRight, ImageOff, Loader2, PenLine, RotateCcw } from "lucide-react";
+import { ChevronLeft, ChevronRight, ImageOff, Loader2, PenLine, RotateCcw, X } from "lucide-react";
 import { cn } from "cn";
 import { API, type VersionInfo } from "@/api";
-import { CrossfadeImage } from "@/components/canvas/shared/CrossfadeImage";
 import { TruncatedText } from "@/components/shared/TruncatedText";
 import {
   AlertDialog,
@@ -18,11 +17,15 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogBody, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useMobileTier } from "@/hooks/useMobileTier";
 import { useProjectsStore } from "@/stores/projects-store";
 import { errMsg } from "@/utils/async";
+import { formatDate } from "@/utils/date-format";
+import { formatFileSize } from "@/utils/file-size";
 import { rejectIfAssetBusy } from "./assetBusyGuard";
 import { VERSION_RESOURCE, type GalleryAsset } from "./gallery-model";
+import { ZoomableImage } from "./ZoomableImage";
 
 export interface AssetImageViewerProps {
   projectName: string;
@@ -43,6 +46,9 @@ type VersionsState =
   | { phase: "ready"; current: number; versions: VersionInfo[] }
   | { phase: "failed"; message: string };
 
+/** 资产图信息行的时间格式：与详情页一致，日期加时刻。 */
+const META_DATE_OPTS: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
+
 /**
  * 画廊里的图片查看器：←/→ 按画廊筛选后的顺序在有资产图的资产之间切换，底部是这张资产图的版本条。
  * 点旧版本只切换查看；「还原到此版本」经单独确认后才改写资产图。
@@ -57,7 +63,8 @@ export function AssetImageViewer({
   readOnly,
   onRestoreVersion,
 }: AssetImageViewerProps) {
-  const { t } = useTranslation(["assets", "dashboard", "common"]);
+  const { t, i18n } = useTranslation(["assets", "dashboard", "common"]);
+  const mobile = useMobileTier();
   const busyHintId = useId();
   const index = name === null ? -1 : assets.findIndex((item) => item.name === name);
   const live = index >= 0 ? assets[index] : undefined;
@@ -74,6 +81,10 @@ export function AssetImageViewer({
   const [restoring, setRestoring] = useState(false);
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [versions, setVersions] = useState<VersionsState | null>(null);
+  // 资产图分辨率由图片加载后报出；换图或换版本时清空，避免显示上一张的数字
+  const [naturalSize, setNaturalSize] = useState<{ width: number; height: number } | null>(null);
+  // 与当前图片绑定的键（地址 + 版本号），用来判断何时该清空分辨率
+  const [sizeKeyShown, setSizeKeyShown] = useState("");
   // 每次打开或换资产都从当前版本看起，版本条重新加载；关闭动画期间保持原样
   const liveName = live?.name ?? null;
   const [session, setSession] = useState<string | null>(null);
@@ -120,6 +131,14 @@ export function AssetImageViewer({
   const shownVersion = viewedInfo?.version ?? (current > 0 ? current : null);
   const src = oldInfo ? (oldInfo.file_url ?? null) : currentUrl;
   const restorable = oldInfo !== undefined && !readOnly && oldInfo.restorable !== false;
+  // 分辨率随图片本身走；src 或版本一变就清掉旧数字
+  const sizeKey = `${src ?? ""}#${shownVersion ?? ""}`;
+  if (sizeKeyShown !== sizeKey) {
+    setSizeKeyShown(sizeKey);
+    setNaturalSize(null);
+  }
+  // 版本记录里的文件大小与创建时间只对「正在看的这一版」有意义
+  const shownInfo = viewedInfo ?? list.find((v) => v.version === shownVersion);
 
   const navigate = (to: string | undefined) => {
     if (to !== undefined && !restoring) onNameChange(to);
@@ -172,102 +191,256 @@ export function AssetImageViewer({
         if (!nextOpen && !restoring) onNameChange(null);
       }}
     >
-      {/* 看图区域固定深色：浅底会干扰对画面明暗的判断 */}
-      <DialogContent size="viewer" className="dark" onKeyDown={handleKeyDown}>
-        <DialogHeader>
-          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-            <DialogTitle className="min-w-0 max-w-full">
-              <TruncatedText text={asset.name} />
-            </DialogTitle>
-            <p className="flex shrink-0 items-center gap-3 text-sm text-muted-foreground">
-              <span>{t(`assets:viewer_type.${asset.type}`)}</span>
-              <span className="tabular-nums">{t("assets:viewer_position", { index: index + 1, total: assets.length })}</span>
-            </p>
-            {shownVersion !== null && (
-              <span className="flex shrink-0 items-center gap-2">
-                <Badge variant={oldInfo ? "outline" : "secondary"}>
-                  <span className="tabular-nums">{t("assets:viewer_version", { version: shownVersion })}</span>
-                </Badge>
-                {oldInfo ? (
-                  <span className="text-sm text-subtle-foreground">
-                    {t("assets:viewer_viewing_old", { version: current })}
-                  </span>
-                ) : (
-                  <span className="text-sm text-subtle-foreground">{t("assets:viewer_current")}</span>
-                )}
-              </span>
-            )}
-            <div className="ml-auto flex shrink-0 items-center gap-2">
-              {restorable && (
+      {/* 看图区域固定深色：浅底会干扰对画面明暗的判断。
+          移动档铺满视口：图片占满中间，标题浮在顶部、版本条浮在底部，都压在图上，
+          关掉顶部与底部的固定占位，把高度全留给画面。 */}
+      <DialogContent
+        size={mobile ? "fullscreen" : "viewer"}
+        className="dark"
+        onKeyDown={handleKeyDown}
+        showCloseButton={!mobile}
+      >
+        {mobile ? (
+          <>
+            <div className="pointer-events-none absolute inset-x-0 top-0 z-sticky flex items-start gap-3 bg-linear-to-b from-scrim to-transparent px-4 pt-3 pb-8">
+              <div className="pointer-events-auto flex min-w-0 flex-1 flex-col gap-0.5">
+                <p className="truncate text-sm font-medium text-popover-foreground">{asset.name}</p>
+                <p className="flex items-center gap-2 text-xs text-subtle-foreground tabular-nums">
+                  <span>{t(`assets:viewer_type.${asset.type}`)}</span>
+                  <span>{t("assets:viewer_position", { index: index + 1, total: assets.length })}</span>
+                  {shownVersion !== null && <span>{t("assets:viewer_version", { version: shownVersion })}</span>}
+                </p>
+              </div>
+              <DialogClose
+                render={<Button variant="secondary" size="icon" className="pointer-events-auto shrink-0" />}
+                aria-label={t("common:close")}
+              >
+                <X aria-hidden />
+              </DialogClose>
+            </div>
+
+            <div className="relative flex min-h-0 flex-1 items-center justify-center">
+              {src ? (
+                <ZoomableImage
+                  key={sizeKey}
+                  src={src}
+                  alt={
+                    shownVersion !== null
+                      ? t("assets:viewer_image_alt_version", { name: asset.name, version: shownVersion })
+                      : t("assets:viewer_image_alt", { name: asset.name })
+                  }
+                  onNaturalSize={setNaturalSize}
+                  onSwipe={(direction) => navigate(direction === "next" ? next : previous)}
+                  compact
+                />
+              ) : (
+                <ImageOff aria-hidden className="size-10 text-muted-foreground" />
+              )}
+            </div>
+
+            <div className="flex shrink-0 flex-col gap-2 bg-linear-to-t from-scrim to-transparent px-3 pt-8 pb-3">
+              <div className="flex items-center gap-2">
                 <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={busy || restoring}
-                  aria-describedby={busy ? busyHintId : undefined}
-                  onClick={requestRestore}
+                  variant="secondary"
+                  size="icon"
+                  disabled={previous === undefined || restoring}
+                  onClick={() => navigate(previous)}
+                  aria-label={t("assets:editor_previous")}
                 >
-                  <RotateCcw aria-hidden data-icon="inline-start" />
-                  {t("assets:viewer_restore")}
+                  <ChevronLeft aria-hidden />
                 </Button>
-              )}
-              {onEdit && (
-                <Button variant="ghost" size="sm" disabled={restoring} onClick={() => onEdit(asset.name)}>
-                  <PenLine aria-hidden data-icon="inline-start" />
-                  {t("common:edit")}
+                <div className="min-w-0 flex-1">
+                  <VersionStrip
+                    state={versions}
+                    shownVersion={shownVersion}
+                    disabled={restoring}
+                    onSelect={setViewing}
+                  />
+                </div>
+                <Button
+                  variant="secondary"
+                  size="icon"
+                  disabled={next === undefined || restoring}
+                  onClick={() => navigate(next)}
+                  aria-label={t("assets:editor_next")}
+                >
+                  <ChevronRight aria-hidden />
                 </Button>
+              </div>
+              <div className="flex items-center gap-3">
+                <dl className="flex min-w-0 flex-1 flex-wrap gap-x-4 gap-y-1 text-xs text-subtle-foreground">
+                  {naturalSize && (
+                    <div className="flex items-center gap-1">
+                      <dt>{t("assets:viewer_meta_resolution")}</dt>
+                      <dd className="tabular-nums">
+                        {naturalSize.width} × {naturalSize.height}
+                      </dd>
+                    </div>
+                  )}
+                  {shownInfo && typeof shownInfo.file_size === "number" && shownInfo.file_size > 0 && (
+                    <div className="flex items-center gap-1">
+                      <dt>{t("assets:viewer_meta_size")}</dt>
+                      <dd className="tabular-nums">{formatFileSize(shownInfo.file_size)}</dd>
+                    </div>
+                  )}
+                </dl>
+                <div className="flex shrink-0 items-center gap-2">
+                  {restorable && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy || restoring}
+                      aria-describedby={busy ? busyHintId : undefined}
+                      onClick={requestRestore}
+                    >
+                      <RotateCcw aria-hidden data-icon="inline-start" />
+                      {t("assets:viewer_restore")}
+                    </Button>
+                  )}
+                  {onEdit && (
+                    <Button variant="ghost" size="sm" disabled={restoring} onClick={() => onEdit(asset.name)}>
+                      <PenLine aria-hidden data-icon="inline-start" />
+                      {t("common:edit")}
+                    </Button>
+                  )}
+                </div>
+              </div>
+              {restorable && busy && (
+                <p id={busyHintId} className="text-xs text-subtle-foreground">
+                  {t("assets:viewer_restore_busy_hint")}
+                </p>
               )}
             </div>
-          </div>
-          {restorable && busy && (
-            <p id={busyHintId} className="text-xs text-subtle-foreground">
-              {t("assets:viewer_restore_busy_hint")}
-            </p>
-          )}
-        </DialogHeader>
-
-        <DialogBody>
-          <div className="flex h-full min-h-0 items-center gap-3">
-            <Button
-              variant="outline"
-              size="icon-lg"
-              disabled={previous === undefined || restoring}
-              onClick={() => navigate(previous)}
-              aria-label={t("assets:editor_previous")}
-            >
-              <ChevronLeft aria-hidden />
-            </Button>
-            <div className="relative flex size-full min-w-0 items-center justify-center">
-              <CrossfadeImage
-                src={src}
-                alt={
-                  shownVersion !== null
-                    ? t("assets:viewer_image_alt_version", { name: asset.name, version: shownVersion })
-                    : t("assets:viewer_image_alt", { name: asset.name })
-                }
-                className="object-contain"
-                fallback={<ImageOff aria-hidden className="size-10 text-muted-foreground" />}
-              />
+          </>
+        ) : (
+          <>
+          <DialogHeader>
+            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+              <DialogTitle className="min-w-0 max-w-full">
+                <TruncatedText text={asset.name} />
+              </DialogTitle>
+              <p className="flex shrink-0 items-center gap-3 text-sm text-muted-foreground">
+                <span>{t(`assets:viewer_type.${asset.type}`)}</span>
+                <span className="tabular-nums">{t("assets:viewer_position", { index: index + 1, total: assets.length })}</span>
+              </p>
+              {shownVersion !== null && (
+                <span className="flex shrink-0 items-center gap-2">
+                  <Badge variant={oldInfo ? "outline" : "secondary"}>
+                    <span className="tabular-nums">{t("assets:viewer_version", { version: shownVersion })}</span>
+                  </Badge>
+                  {oldInfo ? (
+                    <span className="text-sm text-subtle-foreground">
+                      {t("assets:viewer_viewing_old", { version: current })}
+                    </span>
+                  ) : (
+                    <span className="text-sm text-subtle-foreground">{t("assets:viewer_current")}</span>
+                  )}
+                </span>
+              )}
+              <div className="ml-auto flex shrink-0 items-center gap-2">
+                {restorable && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy || restoring}
+                    aria-describedby={busy ? busyHintId : undefined}
+                    onClick={requestRestore}
+                  >
+                    <RotateCcw aria-hidden data-icon="inline-start" />
+                    {t("assets:viewer_restore")}
+                  </Button>
+                )}
+                {onEdit && (
+                  <Button variant="ghost" size="sm" disabled={restoring} onClick={() => onEdit(asset.name)}>
+                    <PenLine aria-hidden data-icon="inline-start" />
+                    {t("common:edit")}
+                  </Button>
+                )}
+              </div>
             </div>
-            <Button
-              variant="outline"
-              size="icon-lg"
-              disabled={next === undefined || restoring}
-              onClick={() => navigate(next)}
-              aria-label={t("assets:editor_next")}
-            >
-              <ChevronRight aria-hidden />
-            </Button>
-          </div>
-        </DialogBody>
+            {restorable && busy && (
+              <p id={busyHintId} className="text-xs text-subtle-foreground">
+                {t("assets:viewer_restore_busy_hint")}
+              </p>
+            )}
+          </DialogHeader>
 
-        <DialogFooter>
-          <VersionStrip
-            state={versions}
-            shownVersion={shownVersion}
-            disabled={restoring}
-            onSelect={setViewing}
-          />
-        </DialogFooter>
+          <DialogBody>
+            <div className="flex h-full min-h-0 items-center gap-3">
+              <Button
+                variant="outline"
+                size="icon-lg"
+                disabled={previous === undefined || restoring}
+                onClick={() => navigate(previous)}
+                aria-label={t("assets:editor_previous")}
+              >
+                <ChevronLeft aria-hidden />
+              </Button>
+              <div className="relative flex size-full min-w-0 items-center justify-center">
+                {src ? (
+                  // 换图换版本时重挂载，缩放与平移随之归位
+                  <ZoomableImage
+                    key={sizeKey}
+                    src={src}
+                    alt={
+                      shownVersion !== null
+                        ? t("assets:viewer_image_alt_version", { name: asset.name, version: shownVersion })
+                        : t("assets:viewer_image_alt", { name: asset.name })
+                    }
+                    onNaturalSize={setNaturalSize}
+                  />
+                ) : (
+                  <ImageOff aria-hidden className="size-10 text-muted-foreground" />
+                )}
+              </div>
+              <Button
+                variant="outline"
+                size="icon-lg"
+                disabled={next === undefined || restoring}
+                onClick={() => navigate(next)}
+                aria-label={t("assets:editor_next")}
+              >
+                <ChevronRight aria-hidden />
+              </Button>
+            </div>
+          </DialogBody>
+
+          <DialogFooter className="flex-col items-stretch">
+            {/* 资产图信息：分辨率来自图片本身，大小与时间来自这一版的版本记录 */}
+            <dl className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-subtle-foreground">
+              {naturalSize && (
+                <div className="flex items-center gap-1.5">
+                  <dt>{t("assets:viewer_meta_resolution")}</dt>
+                  <dd className="tabular-nums">
+                    {naturalSize.width} × {naturalSize.height}
+                  </dd>
+                </div>
+              )}
+              {shownInfo && (
+                <>
+                  {/* 老版本记录可能没有 file_size，缺失时不显示这一项，不显示 NaN */}
+                  {typeof shownInfo.file_size === "number" && shownInfo.file_size > 0 && (
+                    <div className="flex items-center gap-1.5">
+                      <dt>{t("assets:viewer_meta_size")}</dt>
+                      <dd className="tabular-nums">{formatFileSize(shownInfo.file_size)}</dd>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-1.5">
+                    <dt>{t("assets:viewer_meta_created")}</dt>
+                    <dd className="tabular-nums">{formatDate(shownInfo.created_at, i18n.language, META_DATE_OPTS)}</dd>
+                  </div>
+                </>
+              )}
+            </dl>
+            <VersionStrip
+              state={versions}
+              shownVersion={shownVersion}
+              disabled={restoring}
+              onSelect={setViewing}
+            />
+          </DialogFooter>
+          </>
+        )}
 
         <AlertDialog
           open={confirming !== null}
