@@ -317,17 +317,19 @@ export function useAssistantSession(projectName: string | null) {
     connectStream(sessionId);
   }, [projectName, pendingResumeSignals, connectStream, store]);
 
-  // 加载指定会话时间线：非 running 先冷读日志，再从其后接上 entry 流；running
-  // 直接交给 entry 流回放。signal 被 abort 时网络 await 断点由 fetch 自动 reject；
-  // 写 store 与建流前复核 aborted，拦截「abort 发生在响应已 resolve 之后」的窗口。
+  // 加载指定会话时间线：先冷读末尾一页建立游标，再从其后接上 entry 流；running 与
+  // 非 running 同一条路径——running 若跳过冷读，流游标为 -1 会把全部存量条目回放一遍。
+  // signal 被 abort 时网络 await 断点由 fetch 自动 reject；写 store 与建流前复核 aborted，
+  // 拦截「abort 发生在响应已 resolve 之后」的窗口。
   const loadSession = useCallback(async (sessionId: string, options: { signal: AbortSignal }) => {
     const { signal } = options;
     store.getState().beginHistory();
-    let sessionLoaded = false;
+    // 首屏条目是否已落地。只有落地后才接流：时间线为空时流游标是 -1，服务端会回放全部
+    // 存量条目。冷读失败（如网络抖动）同样不能接流，否则长会话会当场退化成全量回放。
+    let pageLoaded = false;
     try {
       const res = await API.getAssistantSession(projectName!, sessionId, { signal });
       if (signal.aborted) return;
-      sessionLoaded = true;
       const raw = res as Record<string, unknown>;
       const sessionObj = (raw.session ?? raw) as Record<string, unknown>;
       const status = (sessionObj.status as string) ?? "idle";
@@ -337,24 +339,28 @@ export function useAssistantSession(projectName: string | null) {
       // 未决问题由 entry 流的 question 事件重新投递。
       clearPendingQuestion();
 
-      if (status !== "running") {
-        // 只取末尾一段：长会话全量拉取会让首屏卡住，更早的条目走「加载更多」
-        const data = await API.listAssistantEntryPage(
-          projectName!,
-          sessionId,
-          { limit: INITIAL_PAGE_SIZE },
-          { signal },
-        );
-        if (signal.aborted) return;
-        store.getState().setEntryPage(data.entries ?? [], data.has_more ?? false);
-        store.getState().setDraftSnapshot(data.draft ?? null, data.draft_rev ?? 0);
-        store.getState().settleHistory();
-      }
+      // 两种状态都只取末尾一段：长会话全量拉取会让首屏卡住，更早的条目走「加载更多」。
+      // running 会话尤其不能省这一步——它不冷读、直接接 entry 流，若时间线为空，流游标就是
+      // -1，服务端会把全部存量条目一次回放（实测上万条），首屏节点暴涨到数万直至渲染进程崩溃。
+      // 先取末尾一页，流从这一页的最后一条之后续上，回放只剩这之后的增量。
+      const data = await API.listAssistantEntryPage(
+        projectName!,
+        sessionId,
+        { limit: INITIAL_PAGE_SIZE },
+        { signal },
+      );
+      if (signal.aborted) return;
+      store.getState().setEntryPage(data.entries ?? [], data.has_more ?? false);
+      store.getState().setDraftSnapshot(data.draft ?? null, data.draft_rev ?? 0);
+      // running 会话不在这里收历史：它随后接上的流还要补发这一页之后的存量条目，那些同样是
+      // 历史、不该播报。历史边界由流的 draft 事件（存量回放结束）收尾，与非 running 一致。
+      if (status !== "running") store.getState().settleHistory();
+      pageLoaded = true;
     } finally {
-      // 冷读失败也接上常驻流，由 entry / draft / status 快照补齐会话。
+      // 首屏条目落地后才接上常驻流；失败时留给 switchSession 报错与重试，不在这里退化成全量回放。
       const deferred = deferredResumeRef.current;
       const resumed = deferred?.projectName === projectName && deferred.sessionId === sessionId;
-      if (!signal.aborted && (sessionLoaded || resumed)) {
+      if (!signal.aborted && (pageLoaded || resumed)) {
         if (resumed) deferredResumeRef.current = null;
         connectStream(sessionId);
       }

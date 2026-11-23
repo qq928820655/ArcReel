@@ -68,15 +68,22 @@ function queuedMessage(id: string, text: string): QueuedMessage {
 /**
  * 冷读走分页接口（首屏只取末尾一段）。测试关心的是「整段历史被载入」，
  * 让分页桩件转调全量桩件，既有用例只需继续 mock `listAssistantEntries`。
+ *
+ * running 会话同样先走这一页（否则流游标为 -1 会全量回放）。只桩了 `getAssistantSession`
+ * 的用例没有给全量接口装桩件，此时按「会话还没有历史」返回空页，保持这些用例原本的语义：
+ * 时间线全部由 entry 流提供。
  */
 function bridgePagedEntries() {
-  vi.spyOn(API, "listAssistantEntryPage").mockImplementation((projectName, sessionId, params, options) =>
-    API.listAssistantEntries(projectName, sessionId, -1, options).then((data) => {
+  vi.spyOn(API, "listAssistantEntryPage").mockImplementation((projectName, sessionId, params, options) => {
+    if (!vi.isMockFunction(API.listAssistantEntries)) {
+      return Promise.resolve({ ...makeEntriesResponse(), has_more: false });
+    }
+    return API.listAssistantEntries(projectName, sessionId, -1, options).then((data) => {
       // 测试数据都很短，直接当「已到最早」返回，避免默认弹出加载更多
       const entries = data.entries ?? [];
       return params.before === undefined ? { ...data, entries, has_more: false } : { ...data, entries: [], has_more: false };
-    }),
-  );
+    });
+  });
 }
 
 function mockIdleSession(entries: TimelineEntry[] = []) {
@@ -1957,10 +1964,11 @@ describe("useAssistantSession", () => {
     expect(state.sessions.map((s) => s.id)).toEqual(["session-2"]);
     expect(state.editingTurnUuid).toBeNull();
     expect(state.sending).toBe(false);
-    // 原会话的流随切换关闭；running 的新会话由 entry 流从头回放，游标不带上一条时间线的残留
+    // 原会话的流随切换关闭；running 的新会话先冷读末尾一页再续流，游标是这一页的最后一条
+    // （桥接桩件返回的 [userEntry(0)]），不带上一条时间线的残留
     expect(FakeSseStream.instances).toHaveLength(2);
     expect(FakeSseStream.instances[0].close).toHaveBeenCalled();
-    expect(streamOptions(1)).toMatchObject({ sessionId: "session-2", after: -1 });
+    expect(streamOptions(1)).toMatchObject({ sessionId: "session-2", after: 0 });
     // 刷新后仍停在新分支
     expect(JSON.parse(localStorage.getItem("arcreel:lastSessionByProject") ?? "{}")).toEqual({ demo: "session-2" });
   });
