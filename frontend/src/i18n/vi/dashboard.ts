@@ -685,6 +685,7 @@ export default {
   'message_edit_resending': 'Đang gửi…',
   'message_edit_resend_hint': '⌘/Ctrl + Enter',
   'message_rewrite_failed': 'Sửa tin nhắn không thành công, vui lòng thử lại',
+  'message_load_older_failed': 'Không tải được tin nhắn cũ hơn, vui lòng thử lại',
   'session_load_failed': 'Không tải được nội dung phiên trò chuyện, hãy chọn lại phiên để thử lại',
   'agent_failure_startup_title': 'Agent chưa khởi động được',
   'agent_failure_turn_title': 'Lượt này chưa hoàn tất',
@@ -2627,6 +2628,9 @@ export default {
   'chat_interrupt_notice': 'Đã dừng, câu trả lời lượt này chưa hoàn tất',
   'chat_compacted_label': 'Đã nén ngữ cảnh',
   'chat_transcript_label': 'Cuộc trò chuyện',
+  'chat_load_older': 'Tải thêm tin nhắn',
+  'chat_loading_older': 'Đang tải tin nhắn cũ hơn…',
+  'chat_no_older': 'Đây là tin nhắn đầu tiên',
   'chat_code_block_label': 'Khối mã',
   'chat_table_label': 'Bảng',
   // Toolbar labels for code blocks, tables, diagrams and links in Markdown (Streamdown translations)

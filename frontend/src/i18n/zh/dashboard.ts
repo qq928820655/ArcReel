@@ -687,6 +687,7 @@ export default {
   'message_edit_resending': '发送中…',
   'message_edit_resend_hint': '⌘/Ctrl + Enter',
   'message_rewrite_failed': '消息改写失败，请稍后重试',
+  'message_load_older_failed': '加载更早的消息失败，请稍后重试',
   'session_load_failed': '会话内容加载失败，请重新选择该会话重试',
   'agent_failure_startup_title': 'Agent 没能启动',
   'agent_failure_turn_title': '这一轮没有完成',
@@ -2402,6 +2403,9 @@ export default {
   'chat_compacted_label': '上下文已压缩',
   // Agent 消息流
   'chat_transcript_label': '对话记录',
+  'chat_load_older': '加载更多消息',
+  'chat_loading_older': '正在加载更早的消息…',
+  'chat_no_older': '已经是最早的消息',
   'chat_code_block_label': '代码块',
   'chat_table_label': '表格',
   // Markdown 正文里代码块、表格、图表与链接的工具条（Streamdown translations）

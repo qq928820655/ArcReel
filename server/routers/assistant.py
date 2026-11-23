@@ -330,12 +330,20 @@ async def list_entries(
     session_id: str,
     _t: Translator,
     after: int = Query(default=-1, ge=-1),
+    limit: int | None = Query(default=None, ge=1, le=500),
+    before: int | None = Query(default=None, ge=0),
 ):
-    """冷读会话事件日志（历史回放；``after`` 为 seq 游标）。"""
+    """冷读会话事件日志（历史回放；``after`` 为 seq 游标）。
+
+    给了 ``limit`` 就走「取末尾一段」：不带 ``before`` 取最新一段，带 ``before``
+    取该 seq 之前的一段；响应带 ``has_more`` 表示前面是否还有更早的条目。
+    """
     try:
         service = get_assistant_service()
         meta = await _validate_session_ownership(service, session_id, project_name, _t)
-        return await service.list_session_entries(session_id, meta=meta, after_seq=after)
+        return await service.list_session_entries(
+            session_id, meta=meta, after_seq=after, limit=limit, before_seq=before
+        )
     except HTTPException:
         raise
     except FileNotFoundError as exc:

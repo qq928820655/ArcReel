@@ -724,15 +724,27 @@ class AssistantService:
         *,
         meta: SessionMeta | None = None,
         after_seq: int = -1,
+        limit: int | None = None,
+        before_seq: int | None = None,
     ) -> dict[str, Any]:
-        """冷读事件日志（历史回放 / 非 running 会话初始加载）。"""
+        """冷读事件日志（历史回放 / 非 running 会话初始加载）。
+
+        ``limit`` 给定时改为「取末尾一段」：不传 ``before_seq`` 取最新一段，
+        传了取该 seq 之前的一段，响应多带 ``has_more`` 供前端判断是否还有更早的。
+        """
         if meta is None:
             meta = await self.meta_store.get(session_id)
             if meta is None:
                 raise FileNotFoundError(f"session not found: {session_id}")
         status = await self.session_manager.get_status(session_id) or meta.status
         project_cwd = await self._aresolve_project_cwd_safe(meta.project_name)
-        entries = await self.event_log.list_entries(session_id, project_cwd, after_seq=after_seq)
+        has_more = False
+        if limit is not None:
+            entries, has_more = await self.event_log.list_recent_entries(
+                session_id, project_cwd, limit=limit, before_seq=before_seq
+            )
+        else:
+            entries = await self.event_log.list_entries(session_id, project_cwd, after_seq=after_seq)
         draft_state = (
             self.session_manager.get_draft_state(session_id) if status == "running" else {"draft": None, "rev": 0}
         )
@@ -742,6 +754,7 @@ class AssistantService:
             "entries": entries,
             "draft": draft_state["draft"],
             "draft_rev": draft_state["rev"],
+            "has_more": has_more,
         }
 
     async def stream_entry_events(

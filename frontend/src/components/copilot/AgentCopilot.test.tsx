@@ -109,6 +109,7 @@ describe("AgentCopilot", () => {
   const interrupt = vi.fn().mockResolvedValue(undefined);
   const createNewSession = vi.fn();
   const switchSession = vi.fn().mockResolvedValue(undefined);
+  const loadOlder = vi.fn().mockResolvedValue(undefined);
   const deleteSession = vi.fn().mockResolvedValue(true);
   const withdrawQueuedMessage = vi.fn().mockResolvedValue(undefined);
   const resendQueuedMessage = vi.fn().mockResolvedValue(undefined);
@@ -128,6 +129,7 @@ describe("AgentCopilot", () => {
       interrupt,
       createNewSession,
       switchSession,
+      loadOlder,
       deleteSession,
       withdrawQueuedMessage,
       resendQueuedMessage,
@@ -721,6 +723,31 @@ describe("AgentCopilot", () => {
     await waitFor(() => {
       expect(useAssistantStore.getState().input).toBe("");
     });
+  });
+
+  it("loads older messages on demand instead of rendering the whole history up front", async () => {
+    const user = userEvent.setup();
+    useAssistantStore.setState({
+      currentSessionId: "session-1",
+      turns: makeTurns(4),
+      hasOlderEntries: true,
+    });
+    render(<AgentCopilot />);
+
+    await user.click(screen.getByRole("button", { name: "加载更多消息" }));
+    expect(loadOlder).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the load-more button once the earliest message is reached", () => {
+    useAssistantStore.setState({
+      currentSessionId: "session-1",
+      turns: makeTurns(4),
+      hasOlderEntries: false,
+      loadingOlder: false,
+    });
+    render(<AgentCopilot />);
+
+    expect(screen.queryByRole("button", { name: "加载更多消息" })).not.toBeInTheDocument();
   });
 
   it("is memoized so a parent re-render does not re-render the whole message flow", () => {

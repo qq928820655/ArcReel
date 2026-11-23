@@ -664,6 +664,34 @@ class TestEventLogStore:
         assert [e["uuid"] for e in entries] == ["b", "c"]
         assert await log_store.list_after("s1", after_seq=2) == []
 
+    async def test_list_tail_returns_latest_page_and_has_more(self, log_store: EventLogStore):
+        await log_store.append("s1", [{"type": "user", "uuid": f"u{i}"} for i in range(10)])
+
+        tail, has_more = await log_store.list_tail("s1", limit=4)
+        # 取最新一段，仍按 seq 升序返回
+        assert [e["uuid"] for e in tail] == ["u6", "u7", "u8", "u9"]
+        assert has_more is True
+
+        whole, has_more_whole = await log_store.list_tail("s1", limit=10)
+        assert [e["uuid"] for e in whole] == [f"u{i}" for i in range(10)]
+        assert has_more_whole is False
+
+    async def test_list_tail_before_seq_walks_backwards(self, log_store: EventLogStore):
+        await log_store.append("s1", [{"type": "user", "uuid": f"u{i}"} for i in range(10)])
+
+        page, has_more = await log_store.list_tail("s1", limit=3, before_seq=6)
+        assert [e["uuid"] for e in page] == ["u3", "u4", "u5"]
+        assert has_more is True
+
+        first, has_more_first = await log_store.list_tail("s1", limit=3, before_seq=3)
+        assert [e["uuid"] for e in first] == ["u0", "u1", "u2"]
+        assert has_more_first is False
+
+    async def test_list_tail_empty_session(self, log_store: EventLogStore):
+        entries, has_more = await log_store.list_tail("nobody", limit=5)
+        assert entries == []
+        assert has_more is False
+
     async def test_append_user_entry_idempotent_by_client_key(self, log_store: EventLogStore):
         entry = build_user_entry([{"type": "text", "text": "hi"}])
         first, created_first = await log_store.append_user_entry("s1", entry, client_key="ck-1")

@@ -221,6 +221,8 @@ export interface EntriesResponse {
   entries: TimelineEntry[];
   draft: DraftState | null;
   draft_rev: number;
+  /** 只在按 `limit` 分页取尾部时出现：前面是否还有更早的条目。 */
+  has_more?: boolean;
 }
 
 export interface SkillInfo {

@@ -248,6 +248,31 @@ describe("stores", () => {
     expect(useAssistantStore.getState().entries.map((e) => e.seq)).toEqual([0, 1, 2]);
   });
 
+  it("setEntryPage records whether older entries remain", () => {
+    const assistant = useAssistantStore.getState();
+    assistant.resetTimeline();
+    assistant.setEntryPage([
+      { seq: 10, type: "user", uuid: "u10", content: [{ type: "text", text: "最新" }] },
+      { seq: 11, type: "assistant", uuid: "a11", content: [{ type: "text", text: "回复" }] },
+    ], true);
+    expect(useAssistantStore.getState().entries.map((e) => e.seq)).toEqual([10, 11]);
+    expect(useAssistantStore.getState().hasOlderEntries).toBe(true);
+  });
+
+  it("prependEntries puts older entries before the current page and keeps seq order", () => {
+    const assistant = useAssistantStore.getState();
+    assistant.resetTimeline();
+    assistant.setEntryPage([
+      { seq: 10, type: "user", uuid: "u10", content: [{ type: "text", text: "最新" }] },
+    ], true);
+    assistant.prependEntries([
+      { seq: 8, type: "user", uuid: "u8", content: [{ type: "text", text: "更早" }] },
+      { seq: 9, type: "assistant", uuid: "a9", content: [{ type: "text", text: "更早回复" }] },
+    ], false);
+    expect(useAssistantStore.getState().entries.map((e) => e.seq)).toEqual([8, 9, 10]);
+    expect(useAssistantStore.getState().hasOlderEntries).toBe(false);
+  });
+
   it("setDraftSnapshot restores accumulated tool JSON so later suffix deltas parse", () => {
     const assistant = useAssistantStore.getState();
     assistant.resetTimeline();

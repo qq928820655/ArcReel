@@ -49,6 +49,12 @@ interface AssistantState {
    * entry 流补发存量），此时到达的条目都算历史。没有载入过程的会话（新建、草稿）为 -1。
    */
   historySeq: number | null;
+  /**
+   * 分页加载：面板首屏只取会话末尾一段，`hasOlderEntries` 表示前面还有更早的条目。
+   * `loadingOlder` 是「加载更多」在途，避免重复触发。
+   */
+  hasOlderEntries: boolean;
+  loadingOlder: boolean;
   /** 排队消息托盘：已发出、Agent 尚未接纳的消息，按发送顺序排列；不进时间线。 */
   queuedMessages: QueuedMessage[];
 
@@ -104,6 +110,11 @@ interface AssistantState {
   setSessionsLoading: (loading: boolean) => void;
   /** 整帧替换日志条目（冷读 / 切换会话）。 */
   setEntries: (entries: TimelineEntry[]) => void;
+  /** 分页冷读的结果：整帧替换，并记录前面是否还有更早的条目。 */
+  setEntryPage: (entries: TimelineEntry[], hasMore: boolean) => void;
+  /** 向上追加更早的一段条目（「加载更多」），并更新是否还有更早的。 */
+  prependEntries: (entries: TimelineEntry[], hasMore: boolean) => void;
+  setLoadingOlder: (loading: boolean) => void;
   /** 追加单条权威条目；seq 门槛去重（身份比对，非内容比对）。 */
   appendEntry: (entry: TimelineEntry) => void;
   /** draft 首帧快照（重连携带累积态 + rev 过滤门槛）。 */
@@ -209,6 +220,8 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     draftTurn: null,
     messagesLoading: false,
     historySeq: -1,
+    hasOlderEntries: false,
+    loadingOlder: false,
     queuedMessages: [],
     input: "",
     composerAppends: [],
@@ -246,6 +259,29 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
         draftTurn: buildDraftTurn(draft, isDraftReplaced(draft, committedIds)),
       });
     },
+    setEntryPage: (entries, hasMore) => {
+      // 与 setEntries 同口径做并集合并，再记下是否还有更早的条目
+      get().setEntries(entries);
+      set({ hasOlderEntries: hasMore });
+    },
+    prependEntries: (entries, hasMore) => {
+      const prevEntries = get().entries;
+      if (entries.length === 0) {
+        set({ hasOlderEntries: hasMore });
+        return;
+      }
+      // 并集合并后按 seq 升序，更早的条目自然排在前面
+      const merged = mergeEntriesBySeq(prevEntries, entries);
+      committedIds = collectCommittedMessageIds(merged);
+      committedSource = merged;
+      set({
+        entries: merged,
+        turns: projectEntries(prevEntries, merged),
+        draftTurn: buildDraftTurn(get().draft, isDraftReplaced(get().draft, committedIds)),
+        hasOlderEntries: hasMore,
+      });
+    },
+    setLoadingOlder: (loading) => set({ loadingOlder: loading }),
     appendEntry: (entry) => {
       const { entries, draft } = get();
       const lastSeq = entries.length > 0 ? entries[entries.length - 1].seq : -1;

@@ -1,5 +1,6 @@
 import { useImperativeHandle, useMemo, type Ref } from "react";
 import { Bot } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { useTranslation } from "react-i18next";
 import type { ImagePayload, TimelineEntry } from "@/types";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
@@ -39,6 +40,8 @@ export interface MessageFlowHandle {
 
 interface MessageFlowProps {
   ref?: Ref<MessageFlowHandle>;
+  /** 向上加载更早的消息；不传时顶部不显示「加载更多」。 */
+  onLoadOlder?: () => void;
   /** 提交原地编辑的改写。 */
   onSubmitEdit: (turnUuid: string, text: string, images: ImagePayload[]) => void;
   /** 启动失败卡片的「重试」；不传时卡片不给重试。 */
@@ -53,7 +56,7 @@ export function MessageFlow(props: MessageFlowProps) {
   );
 }
 
-function MessageFlowBody({ ref, onSubmitEdit, onRetryStartup }: MessageFlowProps) {
+function MessageFlowBody({ ref, onLoadOlder, onSubmitEdit, onRetryStartup }: MessageFlowProps) {
   const { t } = useTranslation("dashboard");
   const { scrollToEnd } = useMessageScroller();
   useImperativeHandle(ref, () => ({ scrollToEnd: () => void scrollToEnd() }), [scrollToEnd]);
@@ -70,6 +73,8 @@ function MessageFlowBody({ ref, onSubmitEdit, onRetryStartup }: MessageFlowProps
   const startupFailure = useAssistantStore((s) => s.startupFailure);
   const entries = useAssistantStore((s) => s.entries);
   const historySeq = useAssistantStore((s) => s.historySeq);
+  const hasOlderEntries = useAssistantStore((s) => s.hasOlderEntries);
+  const loadingOlder = useAssistantStore((s) => s.loadingOlder);
 
   const items = useMemo(() => buildDisplayItems(turns, draftTurn), [turns, draftTurn]);
   const arrived = useMemo(() => arrivedFailures(entries, historySeq), [entries, historySeq]);
@@ -94,6 +99,19 @@ function MessageFlowBody({ ref, onSubmitEdit, onRetryStartup }: MessageFlowProps
     <MessageScroller className="min-h-0 flex-1">
       <MessageScrollerViewport aria-label={t("chat_transcript_label")}>
         <MessageScrollerContent>
+          {/* 首屏只载入会话末尾一段，更早的条目在这里按需向上加载 */}
+          {onLoadOlder && (hasOlderEntries || loadingOlder) && (
+            <div className="flex shrink-0 justify-center pb-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={loadingOlder}
+                onClick={onLoadOlder}
+              >
+                {loadingOlder ? t("chat_loading_older") : t("chat_load_older")}
+              </Button>
+            </div>
+          )}
           <ArrivedFailuresContext.Provider value={arrived}>
             {items.map(({ key, turn, streaming }) => (
               <MessageScrollerItem key={key} messageId={key}>

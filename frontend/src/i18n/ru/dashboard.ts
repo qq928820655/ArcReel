@@ -707,6 +707,7 @@ export default {
   'message_edit_resending': 'Повторная отправка…',
   'message_edit_resend_hint': '⌘/Ctrl + Enter',
   'message_rewrite_failed': 'Не удалось изменить сообщение. Попробуйте снова',
+  'message_load_older_failed': 'Не удалось загрузить более ранние сообщения. Попробуйте снова',
   'session_load_failed': 'Не удалось загрузить эту беседу. Выберите её снова, чтобы повторить попытку.',
   'agent_failure_startup_title': "Агент не запустился",
   'agent_failure_turn_title': "Ход не завершён",
@@ -2486,6 +2487,9 @@ export default {
   'chat_compacted_label': 'Контекст сжат',
   // Agent message stream
   'chat_transcript_label': 'Диалог',
+  'chat_load_older': 'Загрузить ещё сообщения',
+  'chat_loading_older': 'Загрузка более ранних сообщений…',
+  'chat_no_older': 'Это начало диалога',
   'chat_code_block_label': 'Блок кода',
   'chat_table_label': 'Таблица',
   // Toolbar labels for code blocks, tables, diagrams and links in Markdown (Streamdown translations)

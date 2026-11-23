@@ -688,6 +688,7 @@ export default {
   'message_edit_resending': 'Resending…',
   'message_edit_resend_hint': '⌘/Ctrl + Enter',
   'message_rewrite_failed': 'Editing the message failed, please try again',
+  'message_load_older_failed': 'Failed to load earlier messages, please try again',
   'session_load_failed': 'Could not load this conversation. Select it again to retry.',
   'agent_failure_startup_title': "Agent didn't start",
   'agent_failure_turn_title': "This turn didn't finish",
@@ -2403,6 +2404,9 @@ export default {
   'chat_compacted_label': 'Context compacted',
   // Agent message stream
   'chat_transcript_label': 'Conversation',
+  'chat_load_older': 'Load more messages',
+  'chat_loading_older': 'Loading earlier messages…',
+  'chat_no_older': 'This is the start of the conversation',
   'chat_code_block_label': 'Code block',
   'chat_table_label': 'Table',
   // Toolbar labels for code blocks, tables, diagrams and links in Markdown (Streamdown translations)

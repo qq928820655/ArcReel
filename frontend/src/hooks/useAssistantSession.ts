@@ -24,6 +24,11 @@ import type {
 
 const TERMINAL = new Set(["completed", "error", "interrupted"]);
 
+/** 面板首屏载入的条目数。长会话一次拉全量会把上千条记录一起渲染，打开要好几秒。 */
+const INITIAL_PAGE_SIZE = 30;
+/** 点「加载更多」每次向上追加的条目数。 */
+const OLDER_PAGE_SIZE = 50;
+
 function lastEntrySeq(entries: TimelineEntry[]): number {
   return entries.length > 0 ? entries[entries.length - 1].seq : -1;
 }
@@ -333,9 +338,15 @@ export function useAssistantSession(projectName: string | null) {
       clearPendingQuestion();
 
       if (status !== "running") {
-        const data = await API.listAssistantEntries(projectName!, sessionId, -1, { signal });
+        // 只取末尾一段：长会话全量拉取会让首屏卡住，更早的条目走「加载更多」
+        const data = await API.listAssistantEntryPage(
+          projectName!,
+          sessionId,
+          { limit: INITIAL_PAGE_SIZE },
+          { signal },
+        );
         if (signal.aborted) return;
-        store.getState().setEntries(data.entries ?? []);
+        store.getState().setEntryPage(data.entries ?? [], data.has_more ?? false);
         store.getState().setDraftSnapshot(data.draft ?? null, data.draft_rev ?? 0);
         store.getState().settleHistory();
       }
@@ -823,6 +834,33 @@ export function useAssistantSession(projectName: string | null) {
     [projectName, reconcileAfterStaleRewrite, switchSession, store, t, writeSessions],
   );
 
+  // 向上加载更早的条目：以当前最早一条的 seq 为界取前一段，追加到时间线开头。
+  // 首屏只取末尾一段，长会话打开时才不会一次渲染上千条。
+  const loadOlder = useCallback(async () => {
+    const state = store.getState();
+    const sessionId = state.currentSessionId;
+    if (!projectName || !sessionId) return;
+    if (state.loadingOlder || !state.hasOlderEntries) return;
+    const firstSeq = state.entries.length > 0 ? state.entries[0].seq : undefined;
+    if (firstSeq === undefined) return;
+    store.getState().setLoadingOlder(true);
+    try {
+      const data = await API.listAssistantEntryPage(projectName, sessionId, {
+        limit: OLDER_PAGE_SIZE,
+        before: firstSeq,
+      });
+      // 期间切换了会话：这一段属于旧会话，丢弃
+      if (store.getState().currentSessionId !== sessionId) return;
+      store.getState().prependEntries(data.entries ?? [], data.has_more ?? false);
+    } catch (err) {
+      store.getState().setError(errMsg(err, t("message_load_older_failed")));
+    } finally {
+      if (store.getState().currentSessionId === sessionId) {
+        store.getState().setLoadingOlder(false);
+      }
+    }
+  }, [projectName, store, t]);
+
   // 删除会话。返回删除接口是否成功：失败时会话仍在，调用方据此提示并允许重试。
   const deleteSession = useCallback(async (sessionId: string): Promise<boolean> => {
     if (!projectName) return false;
@@ -898,6 +936,7 @@ export function useAssistantSession(projectName: string | null) {
     interrupt,
     createNewSession,
     switchSession,
+    loadOlder,
     deleteSession,
     withdrawQueuedMessage,
     resendQueuedMessage,

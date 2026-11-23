@@ -798,6 +798,30 @@ class EventLogStore:
             rows = result.all()
         return [{"seq": int(row.seq), **row.payload} for row in rows]
 
+    async def list_tail(
+        self,
+        session_id: str,
+        *,
+        limit: int,
+        before_seq: int | None = None,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """取会话末尾一段条目，供面板首屏与「加载更多」用。
+
+        ``before_seq`` 为空时取最新一段；给了就取该 seq 之前的一段。多取一条用来
+        判断前面还有没有更早的条目，返回 ``(entries, has_more)``，条目仍按 seq 升序。
+        """
+        async with self._session_factory() as session:
+            stmt = select(AgentSessionEventLogEntry.seq, AgentSessionEventLogEntry.payload).where(
+                AgentSessionEventLogEntry.session_id == session_id,
+            )
+            if before_seq is not None:
+                stmt = stmt.where(AgentSessionEventLogEntry.seq < before_seq)
+            stmt = stmt.order_by(AgentSessionEventLogEntry.seq.desc()).limit(limit + 1)
+            rows = (await session.execute(stmt)).all()
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        return [{"seq": int(row.seq), **row.payload} for row in reversed(rows)], has_more
+
     async def record_user_message_link(
         self,
         session_id: str,
@@ -987,6 +1011,18 @@ class EventLogService:
     ) -> list[dict[str, Any]]:
         await self.ensure_backfilled(session_id, project_cwd)
         return await self._store.list_after(session_id, after_seq)
+
+    async def list_recent_entries(
+        self,
+        session_id: str,
+        project_cwd: Path | str | None,
+        *,
+        limit: int,
+        before_seq: int | None = None,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """取会话末尾一段条目（面板首屏与「加载更多」）。"""
+        await self.ensure_backfilled(session_id, project_cwd)
+        return await self._store.list_tail(session_id, limit=limit, before_seq=before_seq)
 
     async def resolve_user_message_anchor(
         self,

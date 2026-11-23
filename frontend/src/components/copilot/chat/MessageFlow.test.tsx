@@ -39,13 +39,10 @@ function failureEntry(seq: number): TimelineEntry {
 function mockSession(status: SessionMeta["status"], entries: TimelineEntry[] = []) {
   vi.spyOn(API, "listAssistantSessions").mockResolvedValue({ sessions: [makeSession(status)] });
   vi.spyOn(API, "getAssistantSession").mockResolvedValue({ session: makeSession(status) });
-  vi.spyOn(API, "listAssistantEntries").mockResolvedValue({
-    session_id: "session-1",
-    status,
-    entries,
-    draft: null,
-    draft_rev: 0,
-  });
+  const response = { session_id: "session-1", status, entries, draft: null, draft_rev: 0 };
+  vi.spyOn(API, "listAssistantEntries").mockResolvedValue(response);
+  // 冷读走分页接口：转调上面的全量桩件，用例只关心「整段历史被载入」
+  vi.spyOn(API, "listAssistantEntryPage").mockResolvedValue({ ...response, has_more: false });
 }
 
 function Panel() {

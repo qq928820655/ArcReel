@@ -50,6 +50,7 @@ export const AgentCopilot = memo(function AgentCopilot() {
     interrupt,
     createNewSession,
     switchSession,
+    loadOlder,
     deleteSession,
     withdrawQueuedMessage,
     resendQueuedMessage,
@@ -162,6 +163,7 @@ export const AgentCopilot = memo(function AgentCopilot() {
         <MessageFlow
           key={currentSessionId ?? "draft"}
           ref={flowRef}
+          onLoadOlder={() => void loadOlder()}
           onSubmitEdit={handleSubmitEdit}
           // 改写失败时原始输入留在仍开着的编辑器里，重试由它的「重新发送」发起：
           // 卡片这里给重试只会重放主输入框的无关内容（为空时更是毫无反应）

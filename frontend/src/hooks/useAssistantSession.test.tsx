@@ -65,12 +65,27 @@ function queuedMessage(id: string, text: string): QueuedMessage {
   return { id, content: [{ type: "text", text }], timestamp: "2026-02-01T00:00:00Z", state: "queued" };
 }
 
+/**
+ * 冷读走分页接口（首屏只取末尾一段）。测试关心的是「整段历史被载入」，
+ * 让分页桩件转调全量桩件，既有用例只需继续 mock `listAssistantEntries`。
+ */
+function bridgePagedEntries() {
+  vi.spyOn(API, "listAssistantEntryPage").mockImplementation((projectName, sessionId, params, options) =>
+    API.listAssistantEntries(projectName, sessionId, -1, options).then((data) => {
+      // 测试数据都很短，直接当「已到最早」返回，避免默认弹出加载更多
+      const entries = data.entries ?? [];
+      return params.before === undefined ? { ...data, entries, has_more: false } : { ...data, entries: [], has_more: false };
+    }),
+  );
+}
+
 function mockIdleSession(entries: TimelineEntry[] = []) {
   vi.spyOn(API, "listAssistantSessions").mockResolvedValue({
     sessions: [makeSession("session-1", "idle")],
   });
   vi.spyOn(API, "getAssistantSession").mockResolvedValue({ session: makeSession("session-1", "idle") });
   vi.spyOn(API, "listAssistantEntries").mockResolvedValue(makeEntriesResponse({ entries }));
+  bridgePagedEntries();
 }
 
 describe("useAssistantSession", () => {
@@ -90,6 +105,8 @@ describe("useAssistantSession", () => {
       .spyOn(API, "openAssistantEntriesStream")
       .mockImplementation((options) => new FakeSseStream(options.onEvent));
     vi.spyOn(API, "listAssistantSkills").mockResolvedValue({ skills: [] });
+    // 默认给分页接口装桥接；个别用例自己 mock 分页接口时以它为准（后注册的优先）
+    bridgePagedEntries();
   });
 
   it("loads idle session timeline from the entries endpoint (cold read)", async () => {

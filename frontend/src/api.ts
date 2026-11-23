@@ -3089,6 +3089,24 @@ class API {
     );
   }
 
+  /**
+   * 取会话末尾一段条目：不传 `before` 取最新一段，传了取该 seq 之前的一段。
+   * 响应里的 `has_more` 表示前面还有没有更早的条目。
+   */
+  static async listAssistantEntryPage(
+    projectName: string,
+    sessionId: string,
+    params: { limit: number; before?: number },
+    options: { signal?: AbortSignal } = {}
+  ): Promise<EntriesResponse> {
+    const query = new URLSearchParams({ limit: String(params.limit) });
+    if (params.before !== undefined) query.set("before", String(params.before));
+    return this.request(
+      `${this.assistantBase(projectName)}/sessions/${encodeURIComponent(sessionId)}/entries?${query.toString()}`,
+      { signal: options.signal }
+    );
+  }
+
   static async sendAssistantMessage(
     projectName: string,
     content: string,
