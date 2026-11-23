@@ -769,6 +769,13 @@ body {
     will-change: transform;
 }
 
+/* 收起整块子树：跳过其内部全部布局与绘制，恢复时原样回来。
+   与 offscreen-skip 的 auto 不同，hidden 不参与任何子项的高度计算，滚动容器的
+   scrollHeight 与滚动位置都保持不变，贴底跟随照常工作。 */
+@utility subtree-skip {
+    content-visibility: hidden;
+}
+
 /* Markdown 正文（StreamMarkdown）。颜色只引用语义 token。代码块与表格由 Streamdown 外包一层
    滚动容器，pre 与 table 自身不滚动，键盘聚焦与横向滚动都落在那一层（见 StreamMarkdown）。 */
 @utility markdown-body {

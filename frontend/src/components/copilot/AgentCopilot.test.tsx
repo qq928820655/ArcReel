@@ -723,6 +723,12 @@ describe("AgentCopilot", () => {
     });
   });
 
+  it("is memoized so a parent re-render does not re-render the whole message flow", () => {
+    // 面板无 props，收起时父组件仍会因开关状态重渲染。没有 memo 时整条消息流跟着重渲染，
+    // 长会话（数百项、上万节点）切换一次要两秒。
+    expect((AgentCopilot as unknown as { $$typeof: symbol }).$$typeof).toBe(Symbol.for("react.memo"));
+  });
+
   describe("message flow scrolling", () => {
     const scrollTo = Element.prototype.scrollTo;
 

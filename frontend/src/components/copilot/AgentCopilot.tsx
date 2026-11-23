@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { memo, useCallback, useRef, useState } from "react";
 import { History, PanelRightClose, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -25,7 +25,9 @@ import { MessageFlow, type MessageFlowHandle } from "./chat/MessageFlow";
 // 提问时问题占用输入框的位置。
 // ---------------------------------------------------------------------------
 
-export function AgentCopilot() {
+// 无 props，且面板收起时父组件仍会因开关状态重渲染：不加 memo 会连带重渲染整条消息流，
+// 长会话（数百项）切换一次要 2 秒。
+export const AgentCopilot = memo(function AgentCopilot() {
   const { t } = useTranslation(["dashboard", "common"]);
   const turns = useAssistantStore((s) => s.turns);
   const draftTurn = useAssistantStore((s) => s.draftTurn);
@@ -199,4 +201,4 @@ export function AgentCopilot() {
       />
     </div>
   );
-}
+});

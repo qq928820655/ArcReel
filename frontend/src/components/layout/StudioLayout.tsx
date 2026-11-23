@@ -324,15 +324,23 @@ export function StudioLayout({ children }: StudioLayoutProps) {
             </div>
           )}
           {/* 移动档的 Agent 面板是整屏层：不挤压画布，覆盖其上。
-              关闭按钮由面板自己的标题栏提供，这里不再加一条重复的标题栏。 */}
-          {agentOpen && (
-            <div
-              data-slot="mobile-safe-top"
-              className="absolute inset-0 z-overlay flex flex-col bg-popover"
-            >
-              <div className="min-h-0 flex-1">{demoMode ? <DemoAssistantPanel /> : <AgentCopilot />}</div>
-            </div>
-          )}
+              关闭按钮由面板自己的标题栏提供，这里不再加一条重复的标题栏。
+              与桌面档同口径常驻挂载、只切可见性：面板里挂着会话 hook，条件挂载会在
+              每次收起时卸载它、清空时间线并断开事件流，再打开又要从零拉取整段历史。
+              收起时再加 subtree-skip：长会话有上万节点，仅切 visibility 仍要重算整棵子树
+              的样式，切换一次要 1-2 秒。content-visibility: hidden 让浏览器直接跳过这棵
+              子树，且不改变内部布局，滚动位置与贴底状态原样保留。 */}
+          <div
+            data-slot="mobile-safe-top"
+            aria-hidden={!agentOpen}
+            inert={!agentOpen}
+            className={cn(
+              "absolute inset-0 z-overlay flex flex-col bg-popover",
+              !agentOpen && "invisible subtree-skip",
+            )}
+          >
+            <div className="min-h-0 flex-1">{demoMode ? <DemoAssistantPanel /> : <AgentCopilot />}</div>
+          </div>
         </div>
       ) : (
       <ResizablePanelGroup className="min-h-0 flex-1" onLayoutChanged={handleLayoutChanged}>
