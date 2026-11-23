@@ -8,6 +8,7 @@ from __future__ import annotations
 import unicodedata
 from collections.abc import Callable, Collection, Iterable, Iterator
 from dataclasses import dataclass
+from functools import lru_cache
 
 from lib.project.asset_types import asset_name_comparison_key
 from lib.references.reference_catalog import (
@@ -55,11 +56,19 @@ def _is_legacy_mention_char(ch: str) -> bool:
     return ch == "_" or (ch.isascii() and ch.isalnum()) or ("\u4e00" <= ch <= "\u9fff")
 
 
-def _next_positions(text: str, targets: set[str]) -> list[int]:
-    next_pos = [len(text)] * (len(text) + 1)
-    for i in range(len(text) - 1, -1, -1):
-        next_pos[i] = i if text[i] in targets else next_pos[i + 1]
-    return next_pos
+def _next_char_in(text: str, targets: str, start: int) -> int:
+    """``start`` 起第一个落在 ``targets`` 里的字符下标；没有则返回 ``len(text)``。
+
+    正文里 ``@`` 稀疏，逐字符建「下一个 ``]`` / 换行在哪」的整段数组，代价与全文长度
+    成正比而查询次数只与提及数成正比；这里改为每次实际用到时才扫，返回值与原
+    ``_next_positions(text, set(targets))[start]`` 逐项一致。
+    """
+    best = len(text)
+    for ch in targets:
+        found = text.find(ch, start)
+        if found != -1 and found < best:
+            best = found
+    return best
 
 
 def _iter_mentions(text: str) -> Iterator[tuple[int, int, str]]:
@@ -70,9 +79,18 @@ def _iter_mentions(text: str) -> Iterator[tuple[int, int, str]]:
     but cannot cross line breaks. Curly-brace wrapping is intentionally excluded
     because the editor only writes `@[名称]` and the runtime contract stays on a
     single wrapped form.
+
+    实际扫描在 :func:`_scan_mentions` 里做并按文本缓存：同一条正文在一次读侧计算里
+    会被发声准入、描述派生、参考图派生各扫一遍（实测同一份正文最多扫 5 次），而扫描
+    结果只取决于文本本身。
     """
-    next_square = _next_positions(text, {"]"})
-    next_line_break = _next_positions(text, {"\r", "\n"})
+    yield from _scan_mentions(text)
+
+
+@lru_cache(maxsize=512)
+def _scan_mentions(text: str) -> tuple[tuple[int, int, str], ...]:
+    """``_iter_mentions`` 的扫描主体，按文本缓存（纯函数，结果只取决于入参）。"""
+    found: list[tuple[int, int, str]] = []
     i = 0
     while i < len(text):
         if text[i] != "@":
@@ -90,9 +108,9 @@ def _iter_mentions(text: str) -> Iterator[tuple[int, int, str]]:
         opener = text[i + 1]
         if opener == "[":
             start = i + 2
-            close = next_square[start]
-            if start < close < next_line_break[start]:
-                yield i, close + 1, text[start:close]
+            close = _next_char_in(text, "]", start)
+            if start < close < _next_char_in(text, "\r\n", start):
+                found.append((i, close + 1, text[start:close]))
                 i = close + 1
                 continue
             i += 1
@@ -102,10 +120,11 @@ def _iter_mentions(text: str) -> Iterator[tuple[int, int, str]]:
         while j < len(text) and _is_legacy_mention_char(text[j]):
             j += 1
         if j > i + 1:
-            yield i, j, text[i + 1 : j]
+            found.append((i, j, text[i + 1 : j]))
             i = j
             continue
         i += 1
+    return tuple(found)
 
 
 @dataclass(frozen=True)
