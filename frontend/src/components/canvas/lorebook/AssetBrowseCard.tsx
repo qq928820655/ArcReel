@@ -36,6 +36,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAppStore } from "@/stores/app-store";
+import { useMobileTier } from "@/hooks/useMobileTier";
 import { useProjectsStore } from "@/stores/projects-store";
 import { errMsg } from "@/utils/async";
 import { isAssetBusy, rejectIfAssetBusy } from "./assetBusyGuard";
@@ -98,6 +99,7 @@ export const AssetBrowseCard = memo(function AssetBrowseCard({
   const { t } = useTranslation(["assets", "dashboard"]);
   const titleId = useId();
   const moreRef = useRef<HTMLButtonElement>(null);
+  const mobile = useMobileTier();
   const uploadRef = useRef<HTMLInputElement>(null);
   const [dialog, setDialog] = useState<DialogKey | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -179,6 +181,15 @@ export const AssetBrowseCard = memo(function AssetBrowseCard({
           fallback={<Icon aria-hidden className="size-8" />}
         />
         <GalleryStatusMarker marker={marker} className="absolute top-2 left-2" />
+        {/* 移动档：点图片直接进全屏查看器。桌面端保持「更多 → 查看大图」，这里不铺热区。 */}
+        {mobile && imageUrl && (
+          <button
+            type="button"
+            onClick={() => onView(name)}
+            aria-label={t("assets:view_image", { name })}
+            className="focus-ring absolute inset-0"
+          />
+        )}
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-1 p-3 pt-2.5">
         <div className="flex min-w-0 items-center gap-1">

@@ -46,7 +46,7 @@ function DialogContent({
   showCloseButton = true,
   ...props
 }: DialogPrimitive.Popup.Props & {
-  size?: "sm" | "default" | "lg" | "xl" | "wizard" | "viewer"
+  size?: "sm" | "default" | "lg" | "xl" | "wizard" | "viewer" | "fullscreen"
   showCloseButton?: boolean
 }) {
   const { t } = useTranslation("common")
@@ -64,7 +64,10 @@ function DialogContent({
           "fixed z-overlay flex flex-col overflow-hidden bg-popover text-sm text-popover-foreground shadow-overlay ring-1 ring-foreground/10 duration-100 outline-none",
           "max-md:inset-x-0 max-md:bottom-0 max-md:top-auto max-md:max-h-[calc(100dvh-2rem)] max-md:w-full max-md:translate-x-0 max-md:translate-y-0 max-md:rounded-t-xl max-md:rounded-b-none",
           "md:top-1/2 md:left-1/2 md:max-h-[calc(100dvh-2rem)] md:w-[calc(100%-2rem)] md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-xl",
-          "data-[size=default]:md:max-w-lg data-[size=lg]:md:max-w-2xl data-[size=sm]:md:max-w-sm data-[size=xl]:md:max-w-4xl data-[size=wizard]:md:h-[min(760px,calc(100dvh-48px))] data-[size=wizard]:md:max-w-180 data-[size=viewer]:md:h-[calc(100dvh-2rem)] data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "data-[size=default]:md:max-w-lg data-[size=lg]:md:max-w-2xl data-[size=sm]:md:max-w-sm data-[size=xl]:md:max-w-4xl data-[size=wizard]:md:h-[min(760px,calc(100dvh-48px))] data-[size=wizard]:md:max-w-180 data-[size=viewer]:md:h-[calc(100dvh-2rem)] data-[size=fullscreen]:md:h-[calc(100dvh-2rem)] data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          // 全屏档（fullscreen）在移动档铺满视口：四边贴齐、无圆角、无外框，遮罩即内容；
+          // 上下留出刘海与手势条，底部按钮不落到系统手势区。
+          "data-[size=fullscreen]:max-md:top-0 data-[size=fullscreen]:max-md:right-0 data-[size=fullscreen]:max-md:bottom-0 data-[size=fullscreen]:max-md:left-0 data-[size=fullscreen]:max-md:max-h-none data-[size=fullscreen]:max-md:rounded-none data-[size=fullscreen]:max-md:ring-0 data-[size=fullscreen]:max-md:shadow-none data-[size=fullscreen]:max-md:pt-[env(safe-area-inset-top)] data-[size=fullscreen]:max-md:pb-[env(safe-area-inset-bottom)]",
           className
         )}
         {...props}
