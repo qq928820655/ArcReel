@@ -181,13 +181,15 @@ export const AssetBrowseCard = memo(function AssetBrowseCard({
           fallback={<Icon aria-hidden className="size-8" />}
         />
         <GalleryStatusMarker marker={marker} className="absolute top-2 left-2" />
-        {/* 移动档：点图片直接进全屏查看器。桌面端保持「更多 → 查看大图」，这里不铺热区。 */}
+        {/* 移动档：点图片直接进全屏查看器。桌面端保持「更多 → 查看大图」，这里不铺热区。
+            名称按钮的伪元素铺满整张卡片，DOM 顺序在本热区之后，会盖住它；热区抬到
+            z-sticky 才能优先命中。 */}
         {mobile && imageUrl && (
           <button
             type="button"
             onClick={() => onView(name)}
             aria-label={t("assets:view_image", { name })}
-            className="focus-ring absolute inset-0"
+            className="focus-ring absolute inset-0 z-sticky"
           />
         )}
       </div>
