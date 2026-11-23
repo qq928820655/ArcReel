@@ -54,7 +54,18 @@ export function EditTimelinePlayer({
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
-      <div className="@container-size relative flex min-h-0 flex-1 items-center justify-center">
+      {/* 移动端单列堆叠时这一行是 auto 高度，而舞台是尺寸容器（container-type: size），
+          高度不会随内容计算、会塌成 0。改为按画幅比例给出明确尺寸，画框直接填满它；
+          竖屏再压一个视口上限，避免 9:16 在手机上高得离谱。 */}
+      <div
+        className={cn(
+          "@container-size relative flex min-h-0 flex-1 items-center justify-center",
+          "@max-md/canvas:w-full @max-md/canvas:flex-none",
+          portrait
+            ? "@max-md/canvas:aspect-[9/16] @max-md/canvas:max-h-[60svh]"
+            : "@max-md/canvas:aspect-video",
+        )}
+      >
         <div
           role="region"
           aria-label={t("edit_view_player_aria")}
@@ -63,6 +74,7 @@ export function EditTimelinePlayer({
             portrait
               ? "aspect-[9/16] w-[min(100cqw,calc(100cqh*9/16))]"
               : "aspect-video w-[min(100cqw,calc(100cqh*16/9))]",
+            "@max-md/canvas:size-full",
           )}
         >
           {playback.videoRefs.map((ref, slot) => {

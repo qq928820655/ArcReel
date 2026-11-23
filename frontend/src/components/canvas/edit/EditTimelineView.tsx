@@ -406,9 +406,12 @@ function TimelinePreview({
   const clipIds = useMemo(() => new Set(readout.clips.map((clip) => clip.id)), [readout]);
 
   // 播放器在左、详情栏在右，轨道横跨底部全宽。详情栏随画布宽度取 280px 或 340px。
+  // 画布窄于 768px（手机）时改单列堆叠：两列布局下固定宽详情栏会吃掉大半宽度，
+  // 播放器只剩一条缝。堆叠改用 flex 列：grid 的 auto 行在高度不足时会压到内容
+  // 最小高度，把播放器与控制条挤在一起；flex 子项不收缩，超出的部分交给整块滚动。
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_280px] grid-rows-[minmax(0,1fr)_auto] gap-3 edit-short:gap-2 @6xl/canvas:grid-cols-[minmax(0,1fr)_340px]">
-      <div className="min-h-0 min-w-0">
+    <div className="relative grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_280px] grid-rows-[minmax(0,1fr)_auto] gap-3 edit-short:gap-2 @6xl/canvas:grid-cols-[minmax(0,1fr)_340px] @max-md/canvas:flex @max-md/canvas:flex-col @max-md/canvas:overflow-y-auto">
+      <div className="min-h-0 min-w-0 @max-md/canvas:flex-none">
         <EditTimelinePlayer
           plan={plan}
           playback={playback}
@@ -427,7 +430,9 @@ function TimelinePreview({
         aria-label={t("edit_view_details_aria")}
         // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- 详情栏可能只有说明文字，须能用键盘聚焦后滚动
         tabIndex={0}
-        className="focus-ring relative flex min-h-0 flex-col gap-4 overflow-y-auto rounded-lg border border-border bg-card p-4"
+        // 移动端整块已可滚动，详情栏不再自己滚，避免双层滚动互相抢手势；
+        // 同时去掉 min-h-0：单列堆叠下它是内容高度，不该被 flex 压到内容之下。
+        className="focus-ring relative flex min-h-0 flex-col gap-4 overflow-y-auto rounded-lg border border-border bg-card p-4 @max-md/canvas:min-h-fit @max-md/canvas:overflow-visible"
       >
         <section className="shrink-0" aria-label={t("edit_view_inspector_aria")}>
           <ClipInspector
@@ -442,7 +447,7 @@ function TimelinePreview({
           <IssueList issues={readout.issues} clipIds={clipIds} positions={positions} onSelectClip={setSelectedClipId} />
         </div>
       </div>
-      <div className="col-span-2 min-w-0">
+      <div className="col-span-2 min-w-0 @max-md/canvas:col-auto">
         <EditTimelineTracks
           projectName={projectName}
           readout={readout}
