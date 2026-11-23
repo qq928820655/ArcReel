@@ -179,7 +179,9 @@ def project_video_basis_components(
         )
     elif resource_type == "reference_videos":
         declared = unit_reference_declarations(project, item)
-        resolved = resolve_reference_assets(project, project_path, item)
+        # 同一份正文只解析一次：候选展开复用上面已派生的声明（此前两处各自解析，长项目
+        # 时效判定在这一步多花近一倍时间）。
+        resolved = resolve_reference_assets(project, project_path, item, declared=declared)
         hydration = hydrate_reference_assets(declared, resolved, FilesystemReferenceAssets(project_path))
         if hydration.missing and not record_gaps:
             raise ValueError("declared reference assets are missing")

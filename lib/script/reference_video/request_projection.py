@@ -493,6 +493,7 @@ def resolve_reference_assets(
     unit: dict,
     *,
     expansion: ReferenceExpansionCache | None = None,
+    declared: Sequence[ReferenceResource] | None = None,
 ) -> tuple[ResolvedReferenceAsset, ...]:
     """把正文派生的逻辑引用展开为图片候选，不把「路径已登记」误当成「文件存在」。
 
@@ -502,14 +503,17 @@ def resolve_reference_assets(
     也不按类型排序（见 ADR 0064）。缺字段、未登记或越界路径不制造候选，由 projector 对照
     派生引用统一产出 ``reference_asset_missing``。
 
-    批量展开时传入 ``expansion``，整批共用一份引用目录与路径解析。
+    批量展开时传入 ``expansion``，整批共用一份引用目录与路径解析。调用方已经派生过本单元的
+    声明引用（如时效判定同时要声明与候选）时传入 ``declared``，省掉一次正文解析。
     """
 
     if expansion is None:
         expansion = ReferenceExpansionCache(project, project_path)
     catalog = expansion.catalog
+    if declared is None:
+        declared = unit_reference_declarations(project, unit, catalog=catalog)
     result: list[ResolvedReferenceAsset] = []
-    for reference in unit_reference_declarations(project, unit, catalog=catalog):
+    for reference in declared:
         catalog_entry = catalog.lookup(reference.type, reference.name)
         if catalog_entry is None:
             continue
