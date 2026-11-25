@@ -91,6 +91,26 @@ def test_ark_quota_exhausted_code_alone_counts():
     assert classify_quota_exhaustion(_http_error(429, '{"error": {"code": "QuotaExhausted"}}')) is True
 
 
+def test_bdola_account_pool_unavailable_counts():
+    """b-dola 号池型中转：正文「号池无可用账号（…额度用完…）」是池内无号，不是普通限流。
+
+    措辞是「号池无」而非「没有」，旧关键词只收后者会漏判，导致这一源永远不切。
+    """
+    body = (
+        '{"error": {"code": "GenerationFailed", "message": '
+        '"号池无可用账号（调度关闭/冷却/额度用完；本机尝试过: brandiegagnet02772）: 无号"}}'
+    )
+    assert classify_quota_exhaustion(_http_error(429, body)) is True
+
+
+def test_dola_quota_not_deducted_is_not_exhaustion():
+    """dola 的「生成额度未扣除」是普通失败的常规回执（明说本次不扣费），不是额度耗尽。
+
+    若当作额度处理，dola 的每一次普通失败都会触发切源，属典型误判。
+    """
+    assert classify_quota_exhaustion("dola 回复：视频生成失败，生成额度未扣除。") is False
+
+
 # ---------------------------------------------------------------------------
 # 排除项
 # ---------------------------------------------------------------------------
