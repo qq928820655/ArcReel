@@ -45,6 +45,14 @@ QUOTA_EXHAUSTION_KEYWORDS: tuple[str, ...] = (
     "no balance",
     "payment required",
     "arrears",
+    # 火山方舟（Ark）视频生成把「账号池今日额度用尽」也报成 429，body 形如
+    # ``{"code": "QuotaExhausted", "message": "没有可用账号：…（今日已达上限 8/8，明日重置）…"}``。
+    # 这是额度耗尽而非普通限流——「今日」与「明日重置」表明是日配额，等几分钟不会恢复。
+    "quotaexhausted",
+    "quota exhausted",
+    "没有可用账号",
+    "今日已达上限",
+    "明日重置",
 )
 
 #: 上游故障类状态码：正文里的关键词不作为额度信号。

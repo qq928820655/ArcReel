@@ -77,6 +77,20 @@ def test_google_style_quota_exceeded_is_not_treated_as_exhaustion():
     )
 
 
+def test_ark_daily_account_pool_exhaustion_counts():
+    """火山方舟把「账号池今日额度用尽」也报成 429：日配额、明日重置，属于额度耗尽而非普通限流。"""
+    body = (
+        '{"error": {"code": "QuotaExhausted", "message": '
+        '"没有可用账号：点点滴滴（今日已达上限 8/8，明日重置）、dy2（今日已达上限 6/6，明日重置）"}}'
+    )
+    assert classify_quota_exhaustion(_http_error(429, body)) is True
+
+
+def test_ark_quota_exhausted_code_alone_counts():
+    """只带 QuotaExhausted 代码、没有中文文案时同样算额度耗尽。"""
+    assert classify_quota_exhaustion(_http_error(429, '{"error": {"code": "QuotaExhausted"}}')) is True
+
+
 # ---------------------------------------------------------------------------
 # 排除项
 # ---------------------------------------------------------------------------
