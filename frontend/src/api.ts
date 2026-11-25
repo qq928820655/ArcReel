@@ -856,7 +856,9 @@ class API {
     projectName: string,
     scope: "full" | "current" = "full"
   ): Promise<{ download_token: string; expires_in: number; diagnostics: ExportDiagnostics }> {
-    const payload = await this.request<{
+    // 该端点签发 token 前要先做一遍导出诊断：把整个项目快照一份并逐件校验，大项目实测
+    // 20-40 秒。套默认 20 秒会在拿到 token 前就判超时，导出永远起不来——用慢请求通道。
+    const payload = await this.requestSlow<{
       download_token: string;
       expires_in: number;
       diagnostics?: unknown;
