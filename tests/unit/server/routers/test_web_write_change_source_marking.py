@@ -90,6 +90,8 @@ _EXEMPT: dict[str, str] = {
     "assistant:send_queued_message_now": _NOT_PROJECT_CHANGE,
     "projects:delete_project": _NOT_PROJECT_CHANGE,
     "projects:reset_agent_profile": _NOT_PROJECT_CHANGE,
+    # 多源优先级：只改运行态表里的当前行，不写 project.json，不产生创作内容变更。
+    "source_priority:select_project_source_priority": _NOT_PROJECT_CHANGE,
     # 供应商素材关联
     "provider_asset_links:refresh": _ASSET_LINK,
     "provider_asset_links:unlink_provider_asset": _ASSET_LINK,

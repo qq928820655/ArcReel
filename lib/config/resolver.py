@@ -709,6 +709,15 @@ def _video_bucket_reference_unavailable(
     )
 
 
+def _source_priority_generation_type(generation_type: VideoGenerationType | None) -> VideoGenerationType:
+    """多源条目只做身份可用性校验时用的桶。
+
+    调用方没给定桶说明它不承诺能力（费用估算、限流路由），此时只需判「身份还在不在」；
+    取 ``i2v`` 作代表桶即可——身份校验只看供应商与模型是否仍解析得到，与桶无关。
+    """
+    return generation_type if generation_type is not None else "i2v"
+
+
 def _ensure_text_model_vision_capable(task_type: TextTaskType, provider_id: str, model_id: str) -> None:
     """校验解析出的内置模型支持图像输入；不满足直接报错，不静默换模型。
 
@@ -833,6 +842,7 @@ class ConfigResolver:
         *,
         generation_type: VideoGenerationType | None = None,
         submitted_job: bool = False,
+        project_name: str | None = None,
     ) -> ProviderModel:
         """解析视频任务应使用的 ProviderModel。
 
@@ -855,11 +865,20 @@ class ConfigResolver:
         ``submitted_job`` 为真表示续跑已提交给厂商的任务（只轮询厂商侧已存在的任务、不发起新的生成）：payload 必须锁定
         执行身份，身份可用性校验不拦已下线的模型，其余校验照旧。只由续跑入口声明，新提交恒为假。
 
+        ``project_name`` 是多源优先级的运行态键：项目层状态按项目名分别记录。不给时多源只在全局层生效
+        （状态记在全局作用域），与「项目层没有配置就回落全局」的口径一致。
+
         provider id 不做归一化。只要字面配置结果（不经收敛）请改用 ``video_backend()``。
         """
         async with self._open_session() as (session, svc):
             return await self._resolve_video_provider_model(
-                svc, session, project, payload, generation_type, submitted_job=submitted_job
+                svc,
+                session,
+                project,
+                payload,
+                generation_type,
+                submitted_job=submitted_job,
+                project_name=project_name,
             )
 
     async def resolve_resolution(self, project: dict, provider_id: str, model_id: str) -> str | None:
@@ -1216,12 +1235,17 @@ class ConfigResolver:
         session: AsyncSession,
         project: dict | None,
         keys: _LayeredBackendKeys,
+        *,
+        settings: dict[str, str] | None = None,
     ) -> tuple[str, str]:
         """「默认 + 任务类型桶」四级解析骨架：项目桶 > 项目默认 > 全局桶 > 全局默认 > 自定义供应商默认模型。
 
         媒体类型无关，各层键位由 ``_LayeredBackendKeys`` 声明（见 ``docs/adr/0054``）。各层都要求 ``provider/model``
         完整形态；项目层只写了内置供应商的报错，不按目录推荐补模型（docs/adr/0099）。payload 层与运行时身份收敛
         （如视频自定义供应商的有效身份收敛）不属于骨架，由各媒体的调用方在骨架外处理。
+
+        ``settings`` 是调用方已取的全局设置快照：视频路径要把同一份喂给多源优先级解析，传进来避免同一次解析
+        查两遍库。不给时自行取一次。
         """
         if project:
             for project_key in (keys.project_bucket_key, keys.project_default_key):
@@ -1235,7 +1259,8 @@ class ConfigResolver:
                         return pair
                     continue
                 _reject_bare_builtin_provider(provider, keys.media_type)
-        settings = await svc.get_all_settings()
+        if settings is None:
+            settings = await svc.get_all_settings()
         if keys.global_bucket_key is not None:
             raw = settings.get(keys.global_bucket_key, "")
             if "/" in raw:
@@ -1321,6 +1346,62 @@ class ConfigResolver:
                 model_id=selected.model_id,
             )
 
+    async def _resolve_source_priority_video(
+        self,
+        session: AsyncSession,
+        project: dict | None,
+        generation_type: VideoGenerationType | None,
+        *,
+        project_name: str | None = None,
+        settings: dict[str, str] | None = None,
+    ) -> ProviderModel | None:
+        """多源优先级开启时按当前行解析视频身份；未开启返回 ``None`` 交给四级骨架。
+
+        层级：项目多源 > 全局多源。项目层未开启（或列表为空）时回落全局；两层都没开启时返回
+        ``None``，调用方照原样走既有解析——关掉开关必须与没有这个功能完全等价。
+
+        **关闭态零额外开销**：先看项目快照，项目层没配置就直接读调用方已取的全局设置快照
+        （``settings``）里的 ``source_priority_video`` 键，不再单独查库。关掉开关时视频解析仍只有
+        一次 ``get_all_settings``，与没有这个功能时一致。
+
+        能力闸与骨架路径同口径：给定 ``generation_type`` 时校验该桶能力（参考生视频需要参考图能力等），
+        不满足直接报错，不静默换行——换行是额度耗尽时才做的事，配置本身不合格应让用户看见。
+        """
+        # 延迟导入：source_priority 依赖 lib.db 模型层，模块级导入会与本模块形成环。
+        from lib.config.source_priority import (
+            SourcePriorityConfig,
+            SourcePriorityStore,
+            pick_entry,
+            read_project_config,
+            setting_key,
+            state_scope,
+        )
+
+        config = read_project_config(project, "video")
+        scope, scope_project = state_scope(project_name)
+        if not config.is_active:
+            # 项目层未开启：从已取的全局设置快照解析，未配置即返回 None（与无此功能完全等价）。
+            raw = (settings or {}).get(setting_key("video"), "")
+            config = SourcePriorityConfig.from_json(raw)
+            if not config.is_active:
+                return None
+            scope, scope_project = state_scope(None)
+
+        store = SourcePriorityStore(session)
+        state = await store.read_state(scope=scope, project_name=scope_project, media_type="video")
+        picked = pick_entry(config, state.active_index)
+        if picked is None:
+            return None
+        entry, _index = picked
+        selected = ProviderModel(entry.provider_id, entry.model_id)
+        if generation_type is not None:
+            await self._ensure_video_bucket_capability(session, selected, generation_type)
+        else:
+            await self._ensure_video_identity_resolvable(
+                session, selected, _source_priority_generation_type(generation_type)
+            )
+        return selected
+
     async def _resolve_video_provider_model(
         self,
         svc: ConfigService,
@@ -1330,6 +1411,7 @@ class ConfigResolver:
         generation_type: VideoGenerationType | None = None,
         *,
         submitted_job: bool = False,
+        project_name: str | None = None,
     ) -> ProviderModel:
         """payload 优先解析视频 ProviderModel；无 payload 时按 ``generation_type`` 走桶骨架或不定桶骨架。
 
@@ -1353,13 +1435,23 @@ class ConfigResolver:
             raise ValueError(
                 "续跑已提交的视频任务须在 payload 里锁定提交时的执行身份（video_provider_<generation_type>）"
             )
+        # 多源优先级：开启时按列表当前行取身份，取代四级骨架。payload 锁定与续跑已在上面分流，
+        # 故这里只处理「按当前配置新提交」的任务——续跑换源会导致轮询到另一家厂商的任务。
+        # 一次取全局设置快照，同时喂给多源判定与四级骨架：关掉多源时仍只有这一次查询，
+        # 与没有这个功能时等价（不在关闭态额外查库）。
+        settings = await svc.get_all_settings()
+        source_priority = await self._resolve_source_priority_video(
+            session, project, generation_type, project_name=project_name, settings=settings
+        )
+        if source_priority is not None:
+            return source_priority
         if generation_type is None:
             provider_id, model_id = await self._resolve_layered_backend(
-                svc, session, project, _VIDEO_DEFAULT_LAYERED_KEYS
+                svc, session, project, _VIDEO_DEFAULT_LAYERED_KEYS, settings=settings
             )
             return await self._resolve_effective_video_provider_model(session, ProviderModel(provider_id, model_id))
         provider_id, model_id = await self._resolve_layered_backend(
-            svc, session, project, _VIDEO_LAYERED_KEYS[generation_type]
+            svc, session, project, _VIDEO_LAYERED_KEYS[generation_type], settings=settings
         )
         selected = ProviderModel(provider_id, model_id)
         await self._ensure_video_bucket_capability(session, selected, generation_type)

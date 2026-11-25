@@ -2062,3 +2062,35 @@ class TestAutoResolvedBackendsPreview:
         pid = make_provider_id(provider.id)
         assert preview == {"t2i": (pid, "t2i-m"), "i2i": (pid, "i2i-m"), "i2v": None, "r2v": None, "text": None}
         assert preview == executed
+
+
+class TestSourcePriorityOffCost:
+    """多源优先级关闭时的开销：必须与没有这个功能完全等价，不额外查库、不碰运行态表。
+
+    这是性能回归保护：早先的实现即便开关关闭，每次视频解析也额外查一次全局设置（读多源配置），
+    并在 session 为 None 的路径上直接崩溃。现在全局配置从同一次 ``get_all_settings`` 快照里取，
+    关闭态仍是单次查询。
+    """
+
+    async def test_video_resolution_reads_settings_once_when_priority_off(self):
+        resolver = ConfigResolver.__new__(ConfigResolver)
+        calls = {"n": 0}
+
+        class _CountingConfigService(_FakeConfigService):
+            async def get_all_settings(self) -> dict[str, str]:
+                calls["n"] += 1
+                return await super().get_all_settings()
+
+        fake_svc = _CountingConfigService(settings={})
+        project = {"video_backend": "ark/doubao-seedance-2-0-260128"}
+        resolved = await resolver._resolve_video_provider_model(fake_svc, None, project, None, "i2v")
+        assert (resolved.provider_id, resolved.model_id) == ("ark", "doubao-seedance-2-0-260128")
+        assert calls["n"] == 1
+
+    async def test_priority_off_without_session_does_not_touch_state_table(self):
+        """项目桶命中、全局多源未配置时，即便 session 是 None 也不该去读运行态表。"""
+        resolver = ConfigResolver.__new__(ConfigResolver)
+        fake_svc = _FakeConfigService(settings={})
+        project = {"video_provider_i2v": "vidu/viduq3-pro"}
+        resolved = await resolver._resolve_video_provider_model(fake_svc, None, project, None, "i2v")
+        assert (resolved.provider_id, resolved.model_id) == ("vidu", "viduq3-pro")

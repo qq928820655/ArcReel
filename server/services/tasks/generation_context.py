@@ -488,7 +488,11 @@ async def resolve_generation_context(
             if generation_type is None and video.route is not None:
                 generation_type = video_bucket_for_generation_mode(project.get("generation_mode"))
             resolved = await r.resolve_video_backend(
-                project, payload, generation_type=generation_type, submitted_job=video.submitted_job
+                project,
+                payload,
+                generation_type=generation_type,
+                submitted_job=video.submitted_job,
+                project_name=project_name,
             )
             video_backend, builtin_endpoint = await _get_or_create_video_backend(
                 resolved.provider_id,

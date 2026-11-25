@@ -1113,11 +1113,11 @@ async def update_provider_model(
 
 
 def _project_references(reference: str) -> list[ProjectReference]:
-    """模型设置字段引用了 ``reference`` 的项目；读不了的项目跳过。"""
+    """模型设置字段或多源优先级列表引用了 ``reference`` 的项目；读不了的项目跳过。"""
     return [
         ProjectReference(name=project.name, title=project.title)
         for project in project_model_references()
-        if reference in project.references.values()
+        if reference in project.references.values() or reference in project.source_priority_references
     ]
 
 

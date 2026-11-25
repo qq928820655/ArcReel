@@ -34,7 +34,10 @@ class TestAppModule:
         monkeypatch.setattr(app_module, "GenerationWorker", _build)
         created = app_module.create_generation_worker()
         assert created is worker
-        assert received == {"executor": execute_generation_task, "resume_executor": execute_resume_video_task}
+        # 多源优先级的运行态推进也随 worker 注入：它挂在任务终态回调上。
+        assert received["executor"] is execute_generation_task
+        assert received["resume_executor"] is execute_resume_video_task
+        assert "outcome_listener" in received
 
     @pytest.mark.asyncio
     async def test_lifespan_starts_and_stops_worker(self, monkeypatch):

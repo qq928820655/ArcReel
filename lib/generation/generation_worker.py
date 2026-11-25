@@ -77,6 +77,23 @@ class TaskExecutor(Protocol):
     def __call__(self, task: dict[str, Any], *, claimed_provider_id: str) -> Awaitable[dict[str, Any]]: ...
 
 
+class TaskOutcomeListener(Protocol):
+    """任务终态的旁路观察者：供多源优先级按结果推进当前源。
+
+    只在任务已落终态之后调用，**不得影响任务本身的结果**——实现抛出的异常由 worker 吞掉并记日志。
+    ``exc`` 是执行器抛出的原始异常（成功时为 ``None``），判定额度不足需要看它的状态码与响应体。
+    """
+
+    def __call__(
+        self,
+        task: dict[str, Any],
+        *,
+        succeeded: bool,
+        exc: BaseException | None,
+        provider_id: str,
+    ) -> Awaitable[None]: ...
+
+
 logger = logging.getLogger(__name__)
 
 # Lease 丢失超过 ``lease_ttl * _ORPHAN_RESCAN_LEASE_LOST_MULT`` 才认为是真切换 owner
@@ -467,12 +484,14 @@ class GenerationWorker:
         executor: TaskExecutor,
         resume_executor: ResumeExecutor,
         settle_interrupted_calls: InterruptedCallSettler | None = None,
+        outcome_listener: TaskOutcomeListener | None = None,
     ):
         self.queue = queue or get_generation_queue()
         # 按项目现状推算 provider：只用于没有记录的存量任务、provider 固定的文本与渲染通道，以及重启自愈。
         self._provider_projection = provider_projection
         self._executor = executor
         self._lanes = lanes
+        self._outcome_listener = outcome_listener
         self.lease_name = lease_name
         self.owner_id = f"worker-{uuid.uuid4().hex[:10]}"
 
@@ -911,6 +930,7 @@ class GenerationWorker:
                 return
             logger.exception("任务失败 %s (type=%s, provider=%s)", task_id, task_type, provider_id)
             await asyncio.shield(self.queue.mark_task_failed(task_id, encode_task_failure_message(exc)))
+            await self._notify_outcome(task, succeeded=False, exc=exc, provider_id=provider_id)
             return
 
         if claim.revoked:
@@ -928,7 +948,25 @@ class GenerationWorker:
             # 只吞掉异常 debug 日志，stack trace 会丢失，因此在这里显式 logger.exception 保留现场。
             logger.exception("标记任务成功失败 %s", task_id)
             raise
+        await self._notify_outcome(task, succeeded=True, exc=None, provider_id=provider_id)
         logger.info("任务完成 %s (type=%s, provider=%s)", task_id, task_type, provider_id)
+
+    async def _notify_outcome(
+        self,
+        task: dict[str, Any],
+        *,
+        succeeded: bool,
+        exc: BaseException | None,
+        provider_id: str,
+    ) -> None:
+        """通知终态观察者；任何异常都吞掉，绝不改变任务本身已落定的结果。"""
+        listener = self._outcome_listener
+        if listener is None:
+            return
+        try:
+            await listener(task, succeeded=succeeded, exc=exc, provider_id=provider_id)
+        except Exception:
+            logger.warning("任务终态观察者执行失败 task_id=%s", task.get("task_id"), exc_info=True)
 
     # ------------------------------------------------------------------
     # Restart recovery

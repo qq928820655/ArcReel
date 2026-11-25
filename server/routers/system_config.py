@@ -306,10 +306,25 @@ async def _referenced_models(svc: ConfigService) -> dict[str, str]:
     逐个读项目的 ``project.json``，耗时与项目数成正比。
     """
     settings = await svc.get_all_settings()
-    pairs: list[tuple[str, object]] = [(key, settings.get(key)) for key in GLOBAL_MODEL_SETTING_KEYS]
+    references: dict[str, str] = {
+        value: MODEL_SETTING_MEDIA_TYPES[key]
+        for key in GLOBAL_MODEL_SETTING_KEYS
+        if isinstance(value := settings.get(key), str) and value
+    }
+    # 全局多源优先级的列表：每一行也是一个模型引用，媒体类型就是它所在的通道。
+    from lib.config.source_priority import SOURCE_PRIORITY_MEDIA_TYPES, SourcePriorityStore
+
+    async with async_session_factory() as priority_session:
+        global_priority = await SourcePriorityStore(priority_session).read_global_configs()
+    for media_type in SOURCE_PRIORITY_MEDIA_TYPES:
+        for entry in global_priority[media_type].entries:
+            references.setdefault(entry.pair_key, media_type)
     for project in await asyncio.to_thread(project_model_references):
-        pairs.extend(project.references.items())
-    return {value: MODEL_SETTING_MEDIA_TYPES[key] for key, value in pairs if isinstance(value, str) and value}
+        for key, value in project.references.items():
+            references.setdefault(value, MODEL_SETTING_MEDIA_TYPES[key])
+        for option, media_type in project.source_priority_references.items():
+            references.setdefault(option, media_type)
+    return references
 
 
 def _unlisted_references(references: Mapping[str, str]) -> tuple[list[_RetiringModel], dict[str, str]]:

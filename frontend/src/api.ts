@@ -49,6 +49,9 @@ import type {
   ModelCandidatesResponse,
   OnboardingStatus,
   SystemConfigPatch,
+  SourcePriorityPatch,
+  SourcePriorityResponse,
+  SourcePriorityMediaType,
   ApiKeyInfo,
   AssetLibraryAccount,
   AssetLibraryAccountList,
@@ -566,6 +569,69 @@ class API {
     return this.request("/system/config", {
       method: "PATCH",
       body: JSON.stringify(patch),
+    });
+  }
+
+  // ==================== 多源优先级 ====================
+
+  /** 全局多源优先级配置与当前生效行。 */
+  static async getGlobalSourcePriority(
+    options: { signal?: AbortSignal } = {},
+  ): Promise<SourcePriorityResponse> {
+    return this.request("/system/source-priority", { signal: options.signal });
+  }
+
+  /** 更新全局多源优先级；只更新出现的通道。 */
+  static async updateGlobalSourcePriority(
+    patch: SourcePriorityPatch,
+  ): Promise<SourcePriorityResponse> {
+    return this.request("/system/source-priority", {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
+  }
+
+  /** 手动把全局当前源切到某一行。 */
+  static async selectGlobalSourcePriority(
+    media_type: SourcePriorityMediaType,
+    active_index: number,
+  ): Promise<SourcePriorityResponse> {
+    return this.request("/system/source-priority/select", {
+      method: "POST",
+      body: JSON.stringify({ media_type, active_index }),
+    });
+  }
+
+  /** 项目多源优先级配置与当前生效行；项目层未配置的通道回落全局。 */
+  static async getProjectSourcePriority(
+    name: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<SourcePriorityResponse> {
+    return this.request(`/projects/${encodeURIComponent(name)}/source-priority`, {
+      signal: options.signal,
+    });
+  }
+
+  /** 更新项目多源优先级；只更新出现的通道。 */
+  static async updateProjectSourcePriority(
+    name: string,
+    patch: SourcePriorityPatch,
+  ): Promise<SourcePriorityResponse> {
+    return this.request(`/projects/${encodeURIComponent(name)}/source-priority`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
+  }
+
+  /** 手动把项目当前源切到某一行；该通道须在项目层已配置。 */
+  static async selectProjectSourcePriority(
+    name: string,
+    media_type: SourcePriorityMediaType,
+    active_index: number,
+  ): Promise<SourcePriorityResponse> {
+    return this.request(`/projects/${encodeURIComponent(name)}/source-priority/select`, {
+      method: "POST",
+      body: JSON.stringify({ media_type, active_index }),
     });
   }
 

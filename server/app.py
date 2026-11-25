@@ -117,6 +117,7 @@ from server.routers import (
     script_plan,
     script_review,
     shot_uploads,
+    source_priority,
     storyboard_batches,
     system,
     system_config,
@@ -571,6 +572,13 @@ async def lifespan(app: FastAPI):
     from server.services.project.trash_expiry import start_trash_expiry, stop_trash_expiry
 
     trash_expiry = start_trash_expiry(layout)
+    # 多源优先级每日重置：启动时补一次跨零点的重置，之后等下一个北京零点；随应用关停取消
+    from lib.config.source_priority_reset import (
+        start_source_priority_reset,
+        stop_source_priority_reset,
+    )
+
+    source_priority_reset = start_source_priority_reset(async_session_factory)
     # 供应商素材库入库任务：启动时恢复中断的提交，之后推进中转上传、状态查询与中转副本清理；随应用关停取消
     asset_ingest = start_asset_ingest(async_session_factory)
     # 远端素材：启动时结算中断的正式提交，之后重试删除待删除的正式对象、重算对象引用、清理闲置的本地工作文件（项目与全局资产库）；随应用关停取消
@@ -583,6 +591,7 @@ async def lifespan(app: FastAPI):
     finally:
         await material_maintenance.stop()
         await stop_asset_ingest(asset_ingest)
+        await stop_source_priority_reset(source_priority_reset)
         await stop_trash_expiry(trash_expiry)
         await stop_official_sync(catalog_sync)
         # 运行期异常或关停被取消时同样停掉探针，免得收尾阶段把关停工作误报成卡顿。
@@ -832,6 +841,9 @@ app.include_router(
     provider_asset_links.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["供应商素材库"]
 )
 app.include_router(system_config.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["系统配置"])
+app.include_router(
+    source_priority.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["多源优先级"]
+)
 app.include_router(system.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["系统"])
 app.include_router(api_keys.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["API Key 管理"])
 app.include_router(agent_config.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Agent 配置"])
@@ -890,7 +902,15 @@ mount_remote_mcp(app, remote_mcp_host)
 
 
 def create_generation_worker() -> GenerationWorker:
-    return GenerationWorker(executor=execute_generation_task, resume_executor=execute_resume_video_task)
+    # 多源优先级的运行态推进挂在任务终态上：worker 只认回调协议，具体实现留在 server 侧装配，
+    # 核心库不反向依赖配置服务。
+    from lib.config.source_priority_service import SourcePriorityService
+
+    return GenerationWorker(
+        executor=execute_generation_task,
+        resume_executor=execute_resume_video_task,
+        outcome_listener=SourcePriorityService(async_session_factory),
+    )
 
 
 def start_catalog_sync(

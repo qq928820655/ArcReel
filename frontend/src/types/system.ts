@@ -185,3 +185,43 @@ export interface SystemConfigPatch {
   agent_max_concurrent_sessions?: number;
   market_github_proxy_prefix?: string;
 }
+
+// ==================== 多源优先级 ====================
+
+/** 一条通道里的一行：一对 `(provider_id, model_id)`。 */
+export interface SourcePriorityEntry {
+  provider_id: string;
+  model_id: string;
+}
+
+/** 一条通道的配置：开关 + 有序列表。 */
+export interface SourcePriorityChannel {
+  enabled: boolean;
+  entries: SourcePriorityEntry[];
+}
+
+/** 一条通道的读视图：配置 + 当前生效行（已夹取到合法范围）+ 该层是否生效。 */
+export interface SourcePriorityChannelView {
+  enabled: boolean;
+  entries: SourcePriorityEntry[];
+  active_index: number;
+  /** 开关打开且有至少一行时为真，即当前由本层配置驱动生成。 */
+  active: boolean;
+}
+
+/** 三类通道的配置与运行态。`scope` 标明这份数据来自哪一层；项目层部分通道回落全局时为 `mixed`。 */
+export interface SourcePriorityResponse {
+  scope: "global" | "project" | "mixed";
+  video: SourcePriorityChannelView;
+  image: SourcePriorityChannelView;
+  text: SourcePriorityChannelView;
+}
+
+/** 配置补丁：只更新出现的通道，未出现的保持原样。 */
+export interface SourcePriorityPatch {
+  video?: SourcePriorityChannel;
+  image?: SourcePriorityChannel;
+  text?: SourcePriorityChannel;
+}
+
+export type SourcePriorityMediaType = "video" | "image" | "text";

@@ -1,7 +1,18 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation, useParams, useSearch } from "wouter";
 import { useTranslation } from "react-i18next";
-import { AlertCircle, Bot, Brain, Film, Loader2, Mic, Palette, SlidersHorizontal, type LucideIcon } from "lucide-react";
+import {
+  AlertCircle,
+  Bot,
+  Brain,
+  Film,
+  ListOrdered,
+  Loader2,
+  Mic,
+  Palette,
+  SlidersHorizontal,
+  type LucideIcon,
+} from "lucide-react";
 
 import { API } from "@/api";
 import {
@@ -19,6 +30,7 @@ import { isValidEpisodeTargetDuration } from "@/components/shared/episode-target
 import { executingVideoModel } from "@/components/shared/model-layers";
 import { countModelOverrides } from "@/components/shared/model-overrides";
 import { ModelConfigSection, type ModelConfigValue } from "@/components/shared/ModelConfigSection";
+import { SourcePrioritySection } from "@/components/shared/SourcePrioritySection";
 import { narrationDeliveryProblem } from "@/components/shared/narration-delivery";
 import { PageHeader } from "@/components/shared/page-shell/PageHeader";
 import { PageShell, PageShellFooter } from "@/components/shared/page-shell/PageShell";
@@ -56,6 +68,7 @@ const TABS: Record<ProjectSettingsTab, { labelKey: string; icon: LucideIcon }> =
   basics: { labelKey: "project_settings_tab_basics", icon: SlidersHorizontal },
   style: { labelKey: "project_settings_tab_style", icon: Palette },
   models: { labelKey: "project_settings_tab_models", icon: Film },
+  "source-priority": { labelKey: "project_settings_tab_source_priority", icon: ListOrdered },
   voice: { labelKey: "project_settings_tab_voice", icon: Mic },
   memory: { labelKey: "agent_memory_project_title", icon: Brain },
   agent: { labelKey: "agent_profile_title", icon: Bot },
@@ -63,7 +76,7 @@ const TABS: Record<ProjectSettingsTab, { labelKey: string; icon: LucideIcon }> =
 
 /** 侧栏分组：「项目」四个表单分页共用一个编辑单元，「Agent」两页各管各的保存。 */
 const TAB_GROUPS: { id: string; labelKey: string; tabs: ProjectSettingsTab[] }[] = [
-  { id: "project", labelKey: "project_settings_group_project", tabs: ["basics", "style", "models", "voice"] },
+  { id: "project", labelKey: "project_settings_group_project", tabs: ["basics", "style", "models", "source-priority", "voice"] },
   { id: "agent", labelKey: "project_settings_group_agent", tabs: ["memory", "agent"] },
 ];
 
@@ -418,6 +431,14 @@ function LoadedProjectSettings({ projectName, loaded }: { projectName: string; l
             showOverrideSources
             enable={facts.contentMode === "ad" ? { duration: false } : undefined}
           />
+        </div>
+      );
+      break;
+    case "source-priority":
+      content = (
+        <div className="flex flex-col gap-6">
+          <TabHeader title={t("project_settings_tab_source_priority")} />
+          <SourcePrioritySection scope="project" projectName={projectName} />
         </div>
       );
       break;

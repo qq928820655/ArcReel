@@ -280,7 +280,9 @@ async def resolve_video_execution_for_queued_task(
     execution_payload = (
         without_video_execution_identity(payload) if task_type in ("video", "reference_video") else payload
     )
-    resolved = await resolver.resolve_video_backend(project, execution_payload or {}, generation_type=generation_type)
+    resolved = await resolver.resolve_video_backend(
+        project, execution_payload or {}, generation_type=generation_type, project_name=project_name
+    )
     return resolved, generation_type
 
 

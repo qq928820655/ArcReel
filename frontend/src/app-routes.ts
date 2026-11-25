@@ -12,6 +12,7 @@ export const ROUTE_APP_ASSETS = "/app/assets";
 export const SETTINGS_SECTIONS = [
   "providers",
   "default-models",
+  "source-priority",
   "endpoints",
   "asset-library",
   "arcreel-agent",
@@ -113,7 +114,7 @@ export const APP_TOP_LEVEL_ROUTES = [ROUTE_APP, ROUTE_APP_PROJECTS, ROUTE_APP_SE
 export const WORKSPACE_ROUTE_SETTINGS = "settings";
 
 /** 项目设置的分页，即地址参数 `tab` 的取值，顺序同侧栏；缺省或无法识别时落在 `basics`。 */
-export const PROJECT_SETTINGS_TABS = ["basics", "style", "models", "voice", "memory", "agent"] as const;
+export const PROJECT_SETTINGS_TABS = ["basics", "style", "models", "source-priority", "voice", "memory", "agent"] as const;
 export type ProjectSettingsTab = (typeof PROJECT_SETTINGS_TABS)[number];
 
 /**
