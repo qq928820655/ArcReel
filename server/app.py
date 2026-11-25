@@ -25,6 +25,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -372,6 +373,13 @@ async def lifespan(app: FastAPI):
 
     app.state.in_docker = is_docker
     app.state.sandbox_enabled = sandbox_enabled
+
+    # 默认执行器线程数是 min(32, CPU+4)：2 核机上只有 6 条。详情/列表读盘、SSE 快照构建、
+    # 导出诊断都走 asyncio.to_thread，一个导出快照就能占住 20-40 秒；并发几路时后到的
+    # to_thread 全排在后面，实测详情从 3 秒拖到 50 秒以上，前端 20 秒先超时。放宽到 32 条，
+    # 让读盘类任务不再互相排队（真正的 CPU 并行仍受核数限制，这些任务以 I/O 等待为主）。
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=32, thread_name_prefix="arcreel-io"))
 
     # 随包 ffmpeg 自检一次，结论缓存在进程内；不可用不阻断启动。
     await asyncio.to_thread(log_ffmpeg_status)
