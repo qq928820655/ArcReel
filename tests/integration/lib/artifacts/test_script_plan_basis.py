@@ -41,3 +41,27 @@ def test_script_plan_basis_reads_the_episode_file_only_when_the_ledger_records_a
     basis = resolve_current_artifact_basis(project_dir, ArtifactKey.episode_script_plan(1))
 
     assert (basis is not None) is has_basis
+
+
+def test_export_drops_script_plan_claim_of_an_episode_without_source(tmp_path: Path) -> None:
+    """无原文的集不再登记 script_plan 依据，旧清单里遗留的 claim 不该让整包导出失败。
+
+    回归：账本改判 source_origin=none 后，此前写入清单的 script_plan claim 仍指向
+    drafts/episode_N/script_plan_segments.json，而规划器按新规则跳过该集、不产出正式路径，
+    导出时的 rebase 于是把它判成「无法证明」并抛错，整个导出 500。
+    """
+    from lib.artifacts.artifact_activation import snapshot_preserved_artifact_manifest
+    from lib.artifacts.artifact_manifest import ArtifactManifestEntry
+
+    project_dir = _project(tmp_path, source_origin="none")
+    key = ArtifactKey.episode_script_plan(1)
+    preserved = {
+        key: ArtifactManifestEntry(
+            artifact_path="drafts/episode_1/script_plan_segments.json",
+            basis_digest="0" * 64,
+        )
+    }
+
+    snapshot = snapshot_preserved_artifact_manifest(project_dir, preserved, ships_unselected_versions=True)
+
+    assert key not in snapshot.entries

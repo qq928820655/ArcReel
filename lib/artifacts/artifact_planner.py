@@ -757,7 +757,10 @@ class TargetStatePlanner:
             return
         entry = episode_entry(self.project, binding.episode)
         # 账本记录了集原文来源（v16 起）且为无原文时，盘上同名的集文件不是这一集的规划依据。
+        # 显式记账：该集不再有正式 script_plan 路径，导出时要据此丢弃旧清单里遗留的 claim，
+        # 而不是把它当成「无法证明」让整包导出失败。
         if entry is not None and SOURCE_ORIGIN_FIELD in entry and episode_source_origin(entry) is SourceOrigin.NONE:
+            self._skip(script_plan_key, script_plan_rel, "episode has no source, script_plan is not a formal artifact")
             return
         source_rel = episode_source_relpath(binding.episode)
         source_observation = self.adapter.inspect_artifact(source_rel)

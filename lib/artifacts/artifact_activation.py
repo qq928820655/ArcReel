@@ -351,8 +351,14 @@ def _rebase_preserved_artifact_entries(
 
     依据的视频或音频已不是选中版本、对那个版本仍自证的字幕与呈现 claim 暂不适用：保留时照常落路径，
     ``keep_unselected_media_claims`` 为假时略去。
+
+    规划器**主动跳过**的产物（账本已判定该集无原文、该集不再有正式 script_plan 等）不是「证明不了」，
+    而是「本就不该存在」：旧清单里遗留的 claim 直接丢弃，让导出继续。判据是规划器把同一身份记进了
+    ``skipped``——那表示它看到了这条路径、并给出了不登记的理由；路径凭空消失、规划器没见过它，
+    才属于无法证明，照旧报错。
     """
 
+    skipped_identities = {item.identity for item in plan.skipped}
     rebased: dict[ArtifactKey, ArtifactManifestEntry] = {}
     invalid: list[str] = []
     for key, archived in preserved_entries.items():
@@ -363,6 +369,9 @@ def _rebase_preserved_artifact_entries(
                 continue
             artifact_path = plan.unselected_media_formal_paths[key]
         if artifact_path is None:
+            if skipped_artifact_identity(key) in skipped_identities:
+                # 规划器主动判定该产物不再成立：旧 claim 丢弃，不算导出失败。
+                continue
             invalid.append(key.encode())
             continue
         rebased[key] = ArtifactManifestEntry(
