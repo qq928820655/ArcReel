@@ -89,11 +89,14 @@ def _create_engine():
     _is_sqlite = url.startswith("sqlite")
 
     connect_args = {}
-    kwargs = {}
+    # 连接池显式定容：默认只有 5+10=15 条，SSE 订阅、详情/列表读、后台推进与任务轮询一起打时
+    # 会瞬间吃满，后来的请求排队等 checkout，等满 30 秒抛 QueuePool timeout——前端 20 秒先超时，
+    # 表现为「项目打不开 / 请求无响应」。SQLite 走 WAL，多读并发安全，故与 PostgreSQL 同口径放宽。
+    kwargs = {"pool_size": 10, "max_overflow": 20}
     if _is_sqlite:
         connect_args["timeout"] = 30
     else:
-        kwargs.update(pool_size=10, max_overflow=20, pool_recycle=3600)
+        kwargs["pool_recycle"] = 3600
 
     engine = create_async_engine(
         url,

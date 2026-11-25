@@ -94,3 +94,18 @@ class TestIsSqliteBackend:
     def test_postgresql(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
         assert is_sqlite_backend() is False
+
+
+class TestConnectionPoolSizing:
+    """连接池显式定容：默认 5+10 会在并发读与后台推进叠加时耗尽，请求排队到 30 秒超时。"""
+
+    def test_sqlite_pool_is_sized_beyond_default(self, default_sqlite: Path):
+        from lib.db.engine import _create_engine
+
+        engine = _create_engine()
+        try:
+            pool = engine.pool
+            assert pool.size() == 10
+            assert pool._max_overflow == 20
+        finally:
+            engine.sync_engine.dispose()
