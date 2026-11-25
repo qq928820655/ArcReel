@@ -57,6 +57,7 @@ from lib.generation.generation_queue import (
     DispatchProviderChanged,
     ensure_dispatch_provider,
     get_generation_queue,
+    pinned_pool_identity_keys,
     without_video_execution_identity,
 )
 from lib.generation.render_lane import is_render_task_type
@@ -1063,7 +1064,11 @@ async def execute_video_task(
     requested_visual_prompt = copy.deepcopy(prompt)
     # lane 归桶按项目生成模式求值，与提交入口（``generate_video``）同源：入口挡掉参考生视频后
     # 到达这里的项目恒为 i2v，但桶不在两处各硬编码一次，避免生成模式口径分叉。
-    execution_payload = without_video_execution_identity(payload) if task_id is not None else payload
+    execution_payload = (
+        without_video_execution_identity(payload, keep=pinned_pool_identity_keys(payload))
+        if task_id is not None
+        else payload
+    )
     ctx = await resolve_generation_context(
         project_name,
         execution_payload,

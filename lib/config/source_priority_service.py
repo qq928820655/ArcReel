@@ -112,6 +112,18 @@ class SourcePriorityService:
         outcome = task_outcome(task, succeeded=succeeded, exc=exc, provider_id=provider_id)
         if outcome is None or outcome.media_type not in WIRED_MEDIA_TYPES:
             return
+        # 供应商可用态独立于多源优先级配置：额度/网络是账户级事实，汇总源展开也读它。先记一次，
+        # 与是否配置了多源无关（失败时按阈值标记当天不可用，成功清零）。
+        if outcome.succeeded or outcome.quota_exhausted or outcome.network_unreachable:
+            try:
+                await self._record_provider_availability(outcome)
+            except Exception:
+                logger.warning(
+                    "供应商可用态记录失败 provider=%s media=%s",
+                    outcome.provider_id,
+                    outcome.media_type,
+                    exc_info=True,
+                )
         if not outcome.succeeded and not (outcome.quota_exhausted or outcome.network_unreachable):
             # 与切换无关的失败不推进；成功仍要清零 streak，故只有「失败且两类都不是」提前返回。
             return
@@ -124,6 +136,39 @@ class SourcePriorityService:
                 outcome.media_type,
                 exc_info=True,
             )
+
+    async def _record_provider_availability(self, outcome: TaskOutcome) -> None:
+        """把一次任务终态并入供应商可用态表：成功清零，额度/网络按阈值累计。
+
+        只对真实供应商记录；池虚拟 id（``pool-<id>``）不是真实账户，跳过。
+        """
+        from lib.config.source_pool import advance_member_state, is_source_pool_provider
+        from lib.db.repositories.source_pool_repo import SourcePoolRepository
+
+        if is_source_pool_provider(outcome.provider_id):
+            return
+        async with self._session_factory() as session:
+            repo = SourcePoolRepository(session)
+            row = await repo.get_availability(provider_id=outcome.provider_id, media_type=outcome.media_type)
+            prev_quota = row.quota_streak if row is not None else 0
+            prev_network = row.network_streak if row is not None else 0
+            new_quota, new_network = advance_member_state(
+                quota_streak=prev_quota,
+                network_streak=prev_network,
+                quota_exhausted=outcome.quota_exhausted,
+                network_unreachable=outcome.network_unreachable,
+                succeeded=outcome.succeeded,
+            )
+            if new_quota == prev_quota and new_network == prev_network and row is not None:
+                return
+            await repo.upsert_availability(
+                provider_id=outcome.provider_id,
+                media_type=outcome.media_type,
+                quota_streak=new_quota,
+                network_streak=new_network,
+                last_reset_on=row.last_reset_on if row is not None else None,
+            )
+            await session.commit()
 
     async def _apply(self, outcome: TaskOutcome) -> None:
         project = await _load_project(outcome.project_name)

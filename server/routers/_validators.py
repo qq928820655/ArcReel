@@ -10,6 +10,7 @@ from lib.catalog.errors import ModelNotInCatalogError
 from lib.config.model_setting_keys import MODEL_SETTING_MEDIA_TYPES
 from lib.config.registry import PROVIDER_REGISTRY
 from lib.config.resolver import ConfigResolver, VideoBucketCapabilityError, VideoGenerationType
+from lib.config.source_pool import is_source_pool_provider
 from lib.infra.api_errors import BadRequestError
 
 
@@ -107,7 +108,11 @@ def validate_backend_value(value: str, field_name: str) -> None:
         # 裸 registry id（无 model）同样拒绝：运行时不按目录推荐补模型（docs/adr/0099）
         raise BadRequestError("invalid_backend_format").with_diagnostic(f"field: {field_name}")
     provider_id, model_id = value.split("/", 1)
-    if provider_id not in PROVIDER_REGISTRY and not provider_id.startswith("custom-"):
+    if (
+        provider_id not in PROVIDER_REGISTRY
+        and not provider_id.startswith("custom-")
+        and not is_source_pool_provider(provider_id)
+    ):
         raise BadRequestError("unknown_provider", value=provider_id).with_diagnostic(f"field: {field_name}")
     # 未登记的字段名不做这项校验：新增字段忘记登记时静默放行，而不是误报
     expected_media_type = MODEL_SETTING_MEDIA_TYPES.get(field_name)

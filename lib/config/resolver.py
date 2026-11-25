@@ -36,6 +36,7 @@ from lib.config.service import (
     DEFAULT_REFERENCE_TOTAL_MAX_BYTES,
     ConfigService,
 )
+from lib.config.source_pool import is_source_pool_provider
 from lib.custom_provider import is_custom_provider, parse_provider_id
 from lib.db.repositories.credential_repository import CredentialRepository
 from lib.db.repositories.custom_provider_repo import CustomProviderRepository
@@ -148,7 +149,7 @@ def _trusted_payload_provider(provider_id: object) -> str | None:
     provider_id = provider_id.strip()
     if not provider_id:
         return None
-    if provider_id in PROVIDER_REGISTRY or is_custom_provider(provider_id):
+    if provider_id in PROVIDER_REGISTRY or is_custom_provider(provider_id) or is_source_pool_provider(provider_id):
         return provider_id
     return None
 
@@ -1479,6 +1480,10 @@ class ConfigResolver:
         ``submitted_job`` 为真（续跑已提交给厂商的任务）时不拦已下线的模型，其余判定不变。
         """
         provider_id, model_id = selected.provider_id, selected.model_id
+        if is_source_pool_provider(provider_id):
+            # 汇总源是虚拟身份：校验「池存在且至少一个成员可用」，具体成员由 worker 认领时分配。
+            await self._ensure_source_pool_resolvable(session, provider_id)
+            return None
         if not is_custom_provider(provider_id):
             if submitted_job:
                 catalog.require_listed(provider_id, model_id, "video")
@@ -1505,6 +1510,26 @@ class ConfigResolver:
         if model is None:
             raise _video_bucket_reference_unavailable(generation_type, provider_id, model_id)
         return model
+
+    async def _ensure_source_pool_resolvable(self, session: AsyncSession, provider_id: str) -> None:
+        """校验汇总源存在且启用、至少有一个成员。悬空抛 ``VideoBucketCapabilityError``（请重新选择）。
+
+        不校验成员供应商此刻是否可用（额度/网络是运行态，由 worker 展开时按内存表判定），只判结构性存在：
+        池被删、被停用、或成员被清空时，引用了它的配置应当报错而非静默回退。
+        """
+        from lib.config.source_pool import parse_pool_provider_id
+        from lib.db.repositories.source_pool_repo import SourcePoolRepository
+
+        try:
+            pool_id = parse_pool_provider_id(provider_id)
+        except ValueError as exc:
+            raise _video_bucket_reference_unavailable("i2v", provider_id, "") from exc
+        repo = SourcePoolRepository(session)
+        pool = await repo.get_pool(pool_id)
+        if pool is None or not pool.enabled:
+            raise _video_bucket_reference_unavailable("i2v", provider_id, "")
+        if not await repo.list_members(pool_id):
+            raise _video_bucket_reference_unavailable("i2v", provider_id, "")
 
     async def _ensure_video_bucket_capability(
         self,

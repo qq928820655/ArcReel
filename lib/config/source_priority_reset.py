@@ -25,10 +25,17 @@ logger = logging.getLogger(__name__)
 
 
 async def reset_due(session_factory: async_sessionmaker[AsyncSession], *, now: datetime | None = None) -> int:
-    """把到期的运行态行重置回首行，返回受影响行数。失败只记日志，不抛给调用方。"""
+    """把到期的运行态行重置回首行，并把供应商可用态清零，返回受影响行数。失败只记日志，不抛给调用方。"""
+    today = beijing_today(now)
     try:
         async with session_factory() as session:
-            changed = await SourcePriorityStore(session).reset_if_due(today=beijing_today(now))
+            changed = await SourcePriorityStore(session).reset_if_due(today=today)
+            await session.commit()
+        # 供应商可用态（汇总源成员分配用）同一天粒度清零：额度/网络 streak 归零、last_reset_on 推到今天。
+        from lib.db.repositories.source_pool_repo import SourcePoolRepository
+
+        async with session_factory() as session:
+            await SourcePoolRepository(session).reset_availability_before(media_type="video", today=today)
             await session.commit()
         return changed
     except Exception:

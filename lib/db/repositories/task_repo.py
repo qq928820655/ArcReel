@@ -960,6 +960,39 @@ class TaskRepository(BaseRepository):
         await self.session.commit()
         return rowcount(result)
 
+    async def pin_pool_execution_identity(
+        self,
+        task_id: str,
+        *,
+        provider_id: str,
+        model_id: str,
+    ) -> None:
+        """把汇总源展开选定的成员钉进任务：``provider_id`` 列 + payload 的两个桶键。
+
+        池任务入队时记录的是虚拟身份 ``pool-<id>``，worker 认领时按容量展开成真实成员。执行侧会剥掉
+        payload 里的旧身份、按当前配置重解析——配置指向的仍是池，若不钉住就会解析回池、判漂移、回队。
+        故展开时把成员同时写进 ``provider_id``（供池满过滤与槽位归属）与 payload 桶键（供执行侧跳过重解析）。
+
+        两个桶键都钉成同一成员：认领时算不出执行侧最终落 i2v 还是 r2v（参考生视频按单元实际参考图分流），
+        而池成员选择只按 provider 容量、与桶无关，故同一成员对两桶都成立。执行侧命中任一桶即用该身份。
+        只改写 ``queued`` 行：认领后翻 running 前的这一瞬；已是 running 说明另有分配，不覆盖。
+        """
+        now = utc_now()
+        result = await self.session.execute(select(Task.payload_json).where(Task.task_id == task_id))
+        raw = result.scalar_one_or_none()
+        payload = _json_loads(raw, {}) if raw else {}
+        if not isinstance(payload, dict):
+            payload = {}
+        pair = f"{provider_id}/{model_id}"
+        payload["video_provider_i2v"] = pair
+        payload["video_provider_r2v"] = pair
+        await self.session.execute(
+            update(Task)
+            .where(Task.task_id == task_id, Task.status == "queued")
+            .values(provider_id=provider_id, payload_json=_json_dumps(payload), updated_at=now)
+        )
+        await self.session.commit()
+
     async def list_orphan_tasks_on_start(self) -> list[dict[str, Any]]:
         """返回 running 状态任务用于重启自愈（ADR 0007）。"""
         result = await self.session.execute(

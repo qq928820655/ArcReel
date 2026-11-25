@@ -30,6 +30,7 @@ from lib.db.base import DEFAULT_USER_ID
 from lib.generation.generation_queue import (
     ensure_dispatch_provider,
     get_generation_queue,
+    pinned_pool_identity_keys,
     without_reference_video_execution_identity,
 )
 from lib.generation.video_request_facts import (
@@ -360,7 +361,7 @@ async def execute_reference_video_task(
     #    有参考图 → r2v；无参考图的视频单元降级 → i2v，不送入拒空参考的 r2v 桶模型。
     #    判据取解析结果而非声明，与 backend 的实际请求同源。
     execution_generation_type = reference_video_bucket(with_references=bool(hydration.available))
-    execution_payload = without_reference_video_execution_identity(payload)
+    execution_payload = without_reference_video_execution_identity(payload, keep=pinned_pool_identity_keys(payload))
     request_options = ReferenceRequestOptions.from_payload(payload, legacy_duration_confirmed=True)
     ctx = await resolve_generation_context(
         project_name,

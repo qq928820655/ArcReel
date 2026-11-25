@@ -118,6 +118,7 @@ from server.routers import (
     script_plan,
     script_review,
     shot_uploads,
+    source_pool,
     source_priority,
     storyboard_batches,
     system,
@@ -852,6 +853,7 @@ app.include_router(system_config.router, prefix="/api/v1", dependencies=[Depends
 app.include_router(
     source_priority.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["多源优先级"]
 )
+app.include_router(source_pool.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["视频汇总源"])
 app.include_router(system.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["系统"])
 app.include_router(api_keys.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["API Key 管理"])
 app.include_router(agent_config.router, prefix="/api/v1", dependencies=[Depends(get_current_user)], tags=["Agent 配置"])

@@ -34,6 +34,14 @@ from lib.catalog.errors import ModelNotInCatalogError
 from lib.config.registry import PROVIDER_REGISTRY
 from lib.config.resolver import ConfigResolver
 from lib.config.service import ConfigService, read_video_poll_timeout_seconds
+from lib.config.source_pool import (
+    MemberAvailability,
+    PoolMember,
+    is_source_pool_provider,
+    make_pool_provider_id,
+    parse_pool_provider_id,
+    pick_member,
+)
 from lib.custom_provider.discovery_formats import is_comfyui_protocol
 from lib.custom_provider.endpoint_resolution import resolve_endpoint_spec
 from lib.db import async_session_factory, safe_session_factory
@@ -303,6 +311,35 @@ class CapacityTable:
 
 
 @dataclass
+class PoolTable:
+    """汇总源的内存视图：``pool_id`` → 有序成员，外加各供应商当天的可用态。
+
+    与 ``CapacityTable`` 一同在 ``reload_limits`` 时装载，只在改配置时刷新；worker 每秒一个 cycle
+    的分配路径只读它、不查库。成员可用态按 ``provider_id`` 记录（额度是账户级事实，见 ADR 0123）。
+    """
+
+    _members: dict[int, tuple[PoolMember, ...]]
+    _availability: dict[str, MemberAvailability]
+
+    def members(self, pool_id: int) -> tuple[PoolMember, ...]:
+        return self._members.get(pool_id, ())
+
+    def pool_ids(self) -> tuple[int, ...]:
+        return tuple(self._members)
+
+    def availability(self) -> dict[str, MemberAvailability]:
+        return self._availability
+
+    def replace(
+        self,
+        members: dict[int, tuple[PoolMember, ...]],
+        availability: dict[str, MemberAvailability],
+    ) -> None:
+        self._members = members
+        self._availability = availability
+
+
+@dataclass
 class _Occupant:
     """一条占用：执行体 + phase 标志。
 
@@ -499,6 +536,8 @@ class GenerationWorker:
         # reload 只换它的数字；后者承载 inflight/pending，占用容器引用恒定不被重建。
         self._capacity: CapacityTable = capacity or CapacityTable.from_env()
         self._slots: SlotTable = slots or SlotTable()
+        # 汇总源内存视图：初始为空，随第一次 reload_limits 装载；分配路径只读它、不查库。
+        self._pools = PoolTable(_members={}, _availability={})
         logger.info("Worker 初始容量表: %s", self._capacity._limits)
         self.lease_ttl = max(1.0, float(TASK_WORKER_LEASE_TTL_SEC))
         self.heartbeat_interval = max(0.5, float(TASK_WORKER_HEARTBEAT_SEC))
@@ -554,6 +593,37 @@ class GenerationWorker:
             return
         self._capacity.replace(new._limits)
         logger.info("已更新供应商容量表: %s", self._capacity._limits)
+        # 汇总源与供应商可用态一并装载：同一时机、同一份内存视图，分配路径据此纯内存展开。
+        try:
+            await self._reload_pools()
+        except Exception:
+            logger.warning("从 DB 加载汇总源失败，保持当前配置", exc_info=True)
+
+    async def _reload_pools(self) -> None:
+        """把汇总源成员与供应商可用态装进内存 ``PoolTable``。一次查询取全部成员，不按池 N 次查。"""
+        from lib.db.repositories.source_pool_repo import SourcePoolRepository
+
+        async with safe_session_factory() as session:
+            repo = SourcePoolRepository(session)
+            pools = await repo.list_pools()
+            enabled_ids = {p.id for p in pools if p.enabled}
+            rows = await repo.list_all_members()
+            availability_rows = await repo.list_availability("video")
+        members: dict[int, list[PoolMember]] = {pid: [] for pid in enabled_ids}
+        for row in rows:
+            if row.pool_id not in enabled_ids:
+                continue
+            members[row.pool_id].append(
+                PoolMember(position=row.position, provider_id=row.provider_id, model_id=row.model_id)
+            )
+        self._pools.replace(
+            members={pid: tuple(sorted(ms, key=lambda m: m.position)) for pid, ms in members.items()},
+            availability={
+                row.provider_id: MemberAvailability(quota_streak=row.quota_streak, network_streak=row.network_streak)
+                for row in availability_rows
+            },
+        )
+        logger.info("已更新汇总源表: pools=%d", len(members))
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -678,11 +748,32 @@ class GenerationWorker:
         会把"不支持该 lane 的 provider"也归入黑名单，让 SQL 把这些 task 静默 drop，
         而不是走 worker 二次校验的 ``cap == 0`` fail-fast mark_failed 路径。
         """
-        return frozenset(
+        full = {
             pid
             for pid in self._slots.occupied_providers(media_type)
             if (cap := self._capacity.get(pid, media_type)) > 0 and not self._slots.has_room(pid, media_type, cap)
-        )
+        }
+        # 汇总源满：此刻没有可分配成员（全占满或全不可用）。池任务的 provider_id 是虚拟 ``pool-<id>``，
+        # 一并放进黑名单后 SQL 直接跳过它们，避免每 cycle claim→展开失败→回队的空转。黑名单每 cycle 重算，
+        # 成员空出或次日重置后自动解除。
+        if media_type == "video":
+            full |= self._full_pools(media_type)
+        return frozenset(full)
+
+    def _full_pools(self, media_type: str) -> set[str]:
+        """当前没有可分配成员的汇总源虚拟 id 集合（纯内存，不查库）。"""
+        full: set[str] = set()
+        for pool_id in self._pools.pool_ids():
+            members = self._pools.members(pool_id)
+            if not members:
+                full.add(make_pool_provider_id(pool_id))
+                continue
+            availability = self._pools.availability()
+            occupied = {m.provider_id: self._slots.occupied(m.provider_id, media_type) for m in members}
+            capacity = {m.provider_id: self._capacity.get(m.provider_id, media_type) for m in members}
+            if pick_member(members, availability=availability, occupied=occupied, capacity=capacity) is None:
+                full.add(make_pool_provider_id(pool_id))
+        return full
 
     async def _claim_tasks(self) -> bool:
         """Claim tasks from queue and route to per-provider slots.
@@ -702,6 +793,17 @@ class GenerationWorker:
                 task = await self.queue.claim_next_task(media_type=media_type, pool_full_providers=pool_full)
                 if not task:
                     break
+
+                # 汇总源任务：按内存池表展开成真实成员，写回 provider_id 与 payload 钉住身份。
+                # 展开失败（此刻无可用成员）→ 回队等下轮，绝不 mark_failed。
+                if self._is_pool_task(task):
+                    expanded = await self._expand_pool_task(task, media_type)
+                    if expanded is None:
+                        await self._requeue_single_task(task["task_id"])
+                        # 池整体无可用成员时，同一批里其它池任务也会同样失败，跳出本 lane 的循环，
+                        # 等下个 cycle 或 wake 再试，避免整批空转。
+                        break
+                    task = expanded
 
                 provider_id, recorded = await self._slot_provider(task, media_type)
                 cap = self._capacity.get(provider_id, media_type)
@@ -760,6 +862,43 @@ class GenerationWorker:
                     break
 
         return claimed_any
+
+    def _is_pool_task(self, task: dict[str, Any]) -> bool:
+        """任务的记录 provider 是否指向一个汇总源（``pool-<id>``）。"""
+        recorded = task.get("provider_id")
+        return isinstance(recorded, str) and is_source_pool_provider(recorded)
+
+    async def _expand_pool_task(self, task: dict[str, Any], media_type: str) -> dict[str, Any] | None:
+        """把池任务展开成真实成员：纯内存选一个可分配成员，钉住身份并返回改写了 provider 的任务字典。
+
+        返回 ``None`` 表示此刻没有可分配的成员（全满或全不可用），调用方回队。分配只看内存
+        ``PoolTable`` 与 ``SlotTable``，不查库；选中后写一次 DB 钉住身份（每个池任务一次，非每秒）。
+        """
+        if media_type != "video":
+            # 本期汇总源只服务视频；其它 lane 出现池记录属配置异常，按无成员处理让其回队。
+            return None
+        pool_id = parse_pool_provider_id(task["provider_id"])
+        members = self._pools.members(pool_id)
+        if not members:
+            return None
+        availability = self._pools.availability()
+        occupied = {m.provider_id: self._slots.occupied(m.provider_id, media_type) for m in members}
+        capacity = {m.provider_id: self._capacity.get(m.provider_id, media_type) for m in members}
+        chosen = pick_member(
+            members,
+            availability=availability,
+            occupied=occupied,
+            capacity=capacity,
+        )
+        if chosen is None:
+            # 还有可用成员只是都占满 → 等容量；全不可用 → 也等（次日重置），都保持 queued。
+            return None
+        await self.queue.pin_pool_execution_identity(
+            task["task_id"], provider_id=chosen.provider_id, model_id=chosen.model_id
+        )
+        expanded = dict(task)
+        expanded["provider_id"] = chosen.provider_id
+        return expanded
 
     async def _slot_provider(self, task: dict[str, Any], media_type: str) -> tuple[str, bool]:
         """任务的槽位归属：返回 ``(provider_id, 任务行是否已记录该 provider)``。

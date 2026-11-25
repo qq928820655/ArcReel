@@ -265,6 +265,34 @@ async def _enumerate_candidates(
     except Exception:
         pass  # Non-fatal: custom providers unavailable shouldn't break the options endpoint
 
+    # 汇总源作为视频候选追加：对外是一个虚拟 provider ``pool-<id>``、模型名为「汇总源」或用户命名。
+    # 只列启用的池、且至少一个成员，避免选了永远分配不出的空池。一轮内存拼接，不额外扫目录。
+    try:
+        from lib.config.source_pool import make_pool_provider_id
+        from lib.db.repositories.source_pool_repo import SourcePoolRepository
+
+        pool_repo = SourcePoolRepository(session)
+        pool_rows = await pool_repo.list_pools()
+        all_members = await pool_repo.list_all_members()
+        member_pools = {m.pool_id for m in all_members}
+        for pool in pool_rows:
+            if not pool.enabled or pool.id not in member_pools:
+                continue
+            pid = make_pool_provider_id(pool.id)
+            provider_names[pid] = pool.name
+            candidates.append(
+                _ModelCandidate(
+                    option=f"{pid}/aggregate",
+                    media_type="video",
+                    # 汇总源成员都是视频模型，对 i2v/r2v 都可用；桶归属由成员各自能力在执行期判定，
+                    # 这里按两桶都不排除（unmet 为空），避免下拉里漏掉池。
+                    fit=BucketFit(media_type="video", unmet={}),
+                    display_name=pool.name,
+                )
+            )
+    except Exception:
+        pass  # 非致命：池表不可用不应打断选项端点
+
     return candidates, provider_names
 
 

@@ -164,13 +164,42 @@ def reference_video_enqueue_payload(
     return normalized
 
 
-def without_video_execution_identity(payload: dict[str, Any] | None) -> dict[str, Any]:
-    """移除 payload 中的 enqueue-time 视频身份，使未提交任务按当前配置投影。"""
+def without_video_execution_identity(
+    payload: dict[str, Any] | None, *, keep: frozenset[str] = frozenset()
+) -> dict[str, Any]:
+    """移除 payload 中的 enqueue-time 视频身份，使未提交任务按当前配置投影。
 
-    return {key: value for key, value in (payload or {}).items() if key not in _VIDEO_EXECUTION_IDENTITY_KEYS}
+    ``keep`` 指定要保留的桶键：汇总源任务由 worker 认领时把选定成员钉进 ``video_provider_<gt>``，
+    执行侧须保留它、不再按配置（配置指向的仍是池）重解析，否则会解析回池并判漂移。默认空集，
+    单源任务行为完全不变。
+    """
+
+    removed = _VIDEO_EXECUTION_IDENTITY_KEYS - keep
+    return {key: value for key, value in (payload or {}).items() if key not in removed}
 
 
 without_reference_video_execution_identity = without_video_execution_identity
+
+
+def pinned_pool_identity_keys(payload: dict[str, Any] | None) -> frozenset[str]:
+    """执行侧要保留的桶键：payload 里已由汇总源展开钉住真实成员的桶键。
+
+    汇总源任务在 worker 认领时把选定成员写进 ``video_provider_<gt>``（见
+    ``TaskRepository.pin_pool_execution_identity``）。执行侧据此保留、不再按配置重解析——配置指向的
+    仍是虚拟池 ``pool-<id>``，重解析会解析回池并判漂移。只有值指向真实供应商（非 ``pool-`` 前缀）时
+    才保留；单源任务的 payload 没有这些键，返回空集，剥除行为逐字节不变。
+    """
+    from lib.config.source_pool import is_source_pool_provider
+
+    kept: set[str] = set()
+    for key in _VIDEO_EXECUTION_IDENTITY_KEYS:
+        raw = (payload or {}).get(key)
+        if not isinstance(raw, str) or "/" not in raw:
+            continue
+        provider_id = raw.split("/", 1)[0]
+        if provider_id and not is_source_pool_provider(provider_id):
+            kept.add(key)
+    return frozenset(kept)
 
 
 async def video_bucket_for_queued_task(
@@ -697,6 +726,11 @@ class GenerationQueue:
     async def persist_execution_provider_id(self, task_id: str, provider_id: str) -> None:
         async with self._task_repo() as repo:
             await repo.persist_execution_provider_id(task_id, provider_id)
+
+    async def pin_pool_execution_identity(self, task_id: str, *, provider_id: str, model_id: str) -> None:
+        """汇总源展开后钉住选定成员：``provider_id`` 列 + payload 桶键，供执行侧跳过重解析。"""
+        async with self._task_repo() as repo:
+            await repo.pin_pool_execution_identity(task_id, provider_id=provider_id, model_id=model_id)
 
     async def mark_task_succeeded(self, task_id: str, result: dict[str, Any] | None) -> int:
         """Returns rows_affected (0 = 任务已不在 running，该写入不生效)."""
