@@ -7,12 +7,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import threading
+import time
 import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -479,11 +482,71 @@ def _episodes_summary(episodes: list[EpisodeSummary]) -> EpisodesSummary:
     )
 
 
+#: verified 摘要缓存的存活时长。仅作兜底：正常情况下文件签名变化即失效，TTL 只负责
+#: 收住「签名没覆盖到的输入被外部改动」这种边角情形，不做正确性担保。
+_SUMMARY_CACHE_TTL_SECONDS = 30.0
+
+#: 计算项目签名时跳过的目录：成片输出、呈现产物、字幕与版本快照都不参与产物时效判定
+#: （``renders/`` 不在 ``asset_fingerprints`` 的媒体子目录里，快照按版本号定址），
+#: 它们体积最大且生成期间频繁变化，纳入签名会让缓存几乎每次都失效。
+_SIGNATURE_PRUNED_DIRS = frozenset({"renders", "presentations", "subtitles", "versions"})
+
+
+@dataclass(frozen=True)
+class _SummaryCacheEntry:
+    signature: tuple[tuple[str, int, int], ...]
+    summary: ProjectSummary
+    stored_at: float
+
+
+def _project_signature(project_path: Path) -> tuple[tuple[str, int, int], ...]:
+    """项目目录下参与产物时效判定的文件的 ``(相对路径, 大小, mtime_ns)`` 快照。
+
+    覆盖 ``project.json``、产物清单、剧本、草稿、剪辑时间线、源文与全部媒体子目录；
+    跳过 ``_SIGNATURE_PRUNED_DIRS``（见其说明）。只读文件元数据，不读内容，2 千文件的
+    项目实测 40-60ms，远低于一次 verified 比对的秒级开销。目录软链不下探，与
+    ``asset_fingerprints`` 同口径。
+    """
+
+    parts: list[tuple[str, int, int]] = []
+    for dirpath, dirnames, filenames in os.walk(project_path, followlinks=False):
+        if Path(dirpath) == project_path:
+            dirnames[:] = [name for name in dirnames if name not in _SIGNATURE_PRUNED_DIRS]
+        dirnames.sort()
+        for filename in sorted(filenames):
+            full = os.path.join(dirpath, filename)
+            try:
+                stat = os.lstat(full)
+            except OSError:
+                continue
+            parts.append((os.path.relpath(full, project_path), stat.st_size, stat.st_mtime_ns))
+    # 版本元数据影响产物时效（快照按版本号定址），但目录本身在剪枝集里，单独取这一个文件。
+    versions_json = project_path / "versions" / "versions.json"
+    try:
+        stat = versions_json.stat()
+    except OSError:
+        pass
+    else:
+        parts.append((os.path.join("versions", "versions.json"), stat.st_size, stat.st_mtime_ns))
+    return tuple(parts)
+
+
 class WorkflowStateService:
     """Calculate the first unmet workflow condition from durable project facts."""
 
+    #: verified 摘要缓存：按项目名存一份，签名与未过期同时成立才复用。进程级共享，跨实例
+    #: 有效——路由每次请求都新建 ``WorkflowStateService``，缓存挂在类上才不至于每次落空。
+    _summary_cache: ClassVar[dict[str, _SummaryCacheEntry]] = {}
+    _summary_cache_lock: ClassVar[threading.Lock] = threading.Lock()
+
     def __init__(self, project_manager: ProjectManager):
         self.pm = project_manager
+
+    @classmethod
+    def reset_summary_cache_for_tests(cls) -> None:
+        """测试隔离用：清空摘要缓存，不改变生产行为。"""
+        with cls._summary_cache_lock:
+            cls._summary_cache.clear()
 
     @staticmethod
     def _artifact_state(
@@ -874,8 +937,54 @@ class WorkflowStateService:
         ``currency`` 选产物判定口径：``verified`` 逐件与规范状态比对，代价是每件产物都要
         重建基线（读清单、哈希分镜图与其引用图）；``registered`` 一次读入清单，只判断登记
         与在场，不读产物内容（在场检查只探一个字节）。列表页取后者，其余取前者。
+
+        ``verified`` 走进程级摘要缓存（见 ``_cached_verified_summary``）：详情接口在生成
+        高峰会被 SSE 事件高频触发，同一份未变动的项目重复全量比对会叠加排队、把请求拖过
+        客户端超时。``registered`` 本身足够快，且调用方（列表）一次一个项目、不会重复，不缓存。
         """
 
+        if currency == "verified":
+            return self._cached_verified_summary(project_name, preloaded_scripts=preloaded_scripts)
+        return self._compute_project_summary(project_name, preloaded_scripts=preloaded_scripts, currency=currency)
+
+    def _cached_verified_summary(
+        self,
+        project_name: str,
+        *,
+        preloaded_scripts: Mapping[str, dict[str, Any]] | None,
+    ) -> ProjectSummary:
+        """按项目文件签名复用最近的 ``verified`` 摘要。
+
+        签名不变且未过 TTL 时直接返回缓存；任一不成立就重算并写回。签名只读文件元数据
+        （见 ``_project_signature``），代价远低于一次全量比对。``preloaded_scripts`` 只影响
+        剧本读取的来源、不改变摘要内容，故不进缓存键——缓存命中时调用方已读好的剧本被忽略，
+        换来的是避免一次重复比对，这是此处想要的取舍。
+        """
+
+        project_path = self.pm.get_project_path(project_name)
+        signature = _project_signature(project_path)
+        cache_key = str(project_path.resolve())
+        now = time.monotonic()
+        with self._summary_cache_lock:
+            cached = self._summary_cache.get(cache_key)
+            if (
+                cached is not None
+                and cached.signature == signature
+                and now - cached.stored_at < _SUMMARY_CACHE_TTL_SECONDS
+            ):
+                return cached.summary
+        summary = self._compute_project_summary(project_name, preloaded_scripts=preloaded_scripts, currency="verified")
+        with self._summary_cache_lock:
+            self._summary_cache[cache_key] = _SummaryCacheEntry(signature=signature, summary=summary, stored_at=now)
+        return summary
+
+    def _compute_project_summary(
+        self,
+        project_name: str,
+        *,
+        preloaded_scripts: Mapping[str, dict[str, Any]] | None,
+        currency: ProjectSummaryCurrency,
+    ) -> ProjectSummary:
         project = self.pm.load_project(project_name)
         project_path = self.pm.get_project_path(project_name)
         failure = load_migration_verdict(project_path)

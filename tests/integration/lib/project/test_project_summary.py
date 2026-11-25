@@ -979,3 +979,64 @@ def test_an_unchanged_video_stays_current_after_export_and_import(
     imported = service.import_project_archive(archive_path, uploaded_filename="demo.zip", confirm_report=True)
 
     assert _video_counts(pm, imported.project_name) == {"total": 1, "available": 1, "stale": 0}
+
+
+def test_verified_summary_is_cached_while_the_project_is_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """文件签名不变时重复的 verified 摘要走缓存：详情页被 SSE 高频触发，不该每次全量比对。"""
+
+    pm, project_path = _make_project(tmp_path, "narration")
+    source_text = "完整原文"
+    _write_source(pm, project_path, source_text)
+    _episode_with_media(pm, project_path, source_text)
+    service = WorkflowStateService(pm)
+    WorkflowStateService.reset_summary_cache_for_tests()
+
+    reset_manifest_read_cache_for_tests()
+    first_parses = count_manifest_parses(monkeypatch)
+    first = service.get_project_summary("demo")
+    monkeypatch.undo()
+    assert first_parses["parses"] == 1
+
+    # 第二次：签名未变，命中缓存，不再解析清单。
+    second_parses = count_manifest_parses(monkeypatch)
+    second = service.get_project_summary("demo")
+    monkeypatch.undo()
+    assert second_parses["parses"] == 0
+    assert second.model_dump() == first.model_dump()
+
+
+def test_verified_summary_cache_is_invalidated_by_project_changes(tmp_path: Path) -> None:
+    """项目文件一变，签名随之改变，缓存失效并重算出新结果。"""
+
+    pm, project_path = _make_project(tmp_path, "narration")
+    source_text = "完整原文"
+    _write_source(pm, project_path, source_text)
+    _episode_with_media(pm, project_path, source_text, edit_timeline=False)
+    service = WorkflowStateService(pm)
+    WorkflowStateService.reset_summary_cache_for_tests()
+
+    before = service.get_project_summary("demo")
+    assert before.episodes[0].status == "in_production"
+
+    _create_edit_timeline(pm)
+
+    after = service.get_project_summary("demo")
+    assert after.episodes[0].status == "completed"
+    assert after.episodes_summary.completed == 1
+
+
+def test_registered_summary_bypasses_the_verified_cache(tmp_path: Path) -> None:
+    """``registered`` 不写也不读 verified 缓存：两者口径不同，不能互相顶替。"""
+
+    pm, project_path = _make_project(tmp_path, "narration")
+    source_text = "完整原文"
+    _write_source(pm, project_path, source_text)
+    _episode_with_media(pm, project_path, source_text)
+    service = WorkflowStateService(pm)
+    WorkflowStateService.reset_summary_cache_for_tests()
+
+    service.get_project_summary("demo", currency="registered")
+    with WorkflowStateService._summary_cache_lock:
+        assert WorkflowStateService._summary_cache == {}

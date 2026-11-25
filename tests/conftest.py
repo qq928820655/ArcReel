@@ -240,13 +240,16 @@ def isolated_data_root(tmp_path_factory: pytest.TempPathFactory, monkeypatch: py
     """
     from lib.infra.app_data_dir import reset_for_tests
     from lib.project.project_manager import reset_project_manager_for_tests
+    from lib.workflow.workflow_state import WorkflowStateService
 
     monkeypatch.setenv("ARCREEL_DATA_DIR", str(tmp_path_factory.mktemp("data-root")))
     reset_for_tests()
     reset_project_manager_for_tests()
+    WorkflowStateService.reset_summary_cache_for_tests()
     yield
     reset_for_tests()
     reset_project_manager_for_tests()
+    WorkflowStateService.reset_summary_cache_for_tests()
 
 
 @pytest.fixture(autouse=True)
