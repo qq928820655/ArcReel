@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
+import { cn } from "cn";
 
 import { API } from "@/api";
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,7 @@ import type {
   ModelCandidatesResponse,
   SourcePriorityChannel,
   SourcePriorityChannelView,
+  SourcePriorityEntry,
   SourcePriorityMediaType,
   SourcePriorityResponse,
 } from "@/types/system";
@@ -73,6 +75,17 @@ function buildPatch(drafts: Drafts, baseline: Drafts): Partial<Record<SourcePrio
     }
   }
   return patch;
+}
+
+/** 一行来源的展示名：`供应商名 · 模型名`，缺译名时退回裸 id。 */
+function describeEntry(
+  entry: SourcePriorityEntry,
+  providerNames: Record<string, string>,
+  modelNames: Record<string, string>,
+): string {
+  const provider = providerNames[entry.provider_id] || entry.provider_id;
+  const model = modelNames[`${entry.provider_id}/${entry.model_id}`] || entry.model_id;
+  return `${provider} · ${model}`;
 }
 
 /** 某通道可选模型：视频取两个任务桶的并集，图片取两个桶并集，文本取默认层。 */
@@ -219,15 +232,20 @@ export function SourcePrioritySection({ scope, projectName }: SourcePrioritySect
         const view = response[media];
         const options = channelOptions(candidates, media);
         const showFallbackHint = scope === "project" && !view.active && response.scope !== "project";
+        const activeEntry = view.active ? view.entries[view.active_index] : undefined;
         return (
           <section key={media} className="flex flex-col gap-4 rounded-lg border border-border bg-card p-4">
             <div className="flex items-start justify-between gap-4">
               <div className="flex min-w-0 flex-col gap-1">
                 <h3 className="text-sm font-medium">{t(labelKey)}</h3>
                 <p className="text-xs text-muted-foreground">
-                  {draft.enabled && draft.rows.length > 0
-                    ? t("source_priority_active_row", { index: view.active_index + 1 })
-                    : t("source_priority_empty")}
+                  {activeEntry
+                    ? t("source_priority_current_source", {
+                        source: describeEntry(activeEntry, providerNames, modelNames),
+                      })
+                    : view.entries.length > 0
+                      ? t("source_priority_not_enabled")
+                      : t("source_priority_empty")}
                 </p>
                 {hintKey ? <p className="text-xs text-muted-foreground">{t(hintKey)}</p> : null}
                 {showFallbackHint ? (
@@ -245,7 +263,7 @@ export function SourcePrioritySection({ scope, projectName }: SourcePrioritySect
 
             <div className="flex flex-col gap-2">
               {draft.rows.map((row, index) => {
-                const isActive = draft.enabled && view.active_index === index;
+                const isActive = view.active && view.active_index === index;
                 return (
                   <div key={index} className="flex flex-col gap-1">
                     <div className="flex items-center gap-2">
@@ -266,14 +284,20 @@ export function SourcePrioritySection({ scope, projectName }: SourcePrioritySect
                           aria-label={`${t(labelKey)} ${index + 1}`}
                         />
                       </div>
-                      <Button
-                        variant={isActive ? "secondary" : "outline"}
-                        size="sm"
+                      <button
+                        type="button"
+                        aria-pressed={isActive}
                         disabled={!draft.enabled || !splitPair(row.pair) || dirty}
                         onClick={() => void selectRow(media, index)}
+                        className={cn(
+                          "inline-flex h-8 shrink-0 items-center justify-center rounded-lg border px-2.5 text-sm font-medium whitespace-nowrap transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50",
+                          isActive
+                            ? "border-good/40 bg-good/12 text-good"
+                            : "border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
+                        )}
                       >
-                        {t("source_priority_use_row")}
-                      </Button>
+                        {isActive ? t("source_priority_row_active") : t("source_priority_row_pending")}
+                      </button>
                       <Button
                         variant="ghost"
                         size="icon"
