@@ -386,3 +386,69 @@ class TestRepoStateMachineGuards:
         final = await repo.get(t["task_id"])
         assert final["status"] == "cancelled"
         assert final["cancelled_by"] == "interrupted"
+
+
+@pytest.mark.asyncio
+class TestClearQueuedProviderRecords:
+    """切源后清空排队任务 provider 记录：只动 queued，按项目/媒体类型收窄。"""
+
+    async def test_clears_only_queued_video_rows(self, db_session):
+        repo = TaskRepository(db_session)
+        # 先入队并认领一条，让它进入 running，再入队一条保持 queued。
+        running = await repo.enqueue(
+            project_name="demo",
+            task_type="reference_video",
+            media_type="video",
+            resource_id="E1U2",
+            provider_id="ark",
+        )
+        await repo.claim_next("video")
+        queued = await repo.enqueue(
+            project_name="demo",
+            task_type="reference_video",
+            media_type="video",
+            resource_id="E1U1",
+            provider_id="ark",
+        )
+        other_media = await repo.enqueue(
+            project_name="demo",
+            task_type="storyboard",
+            media_type="image",
+            resource_id="E1S1",
+            provider_id="ark",
+        )
+        await db_session.commit()
+
+        cleared = await repo.clear_queued_provider_records(media_type="video")
+        assert cleared == 1
+
+        assert (await repo.get(queued["task_id"]))["provider_id"] is None
+        assert (await repo.get(running["task_id"]))["provider_id"] == "ark"
+        assert (await repo.get(other_media["task_id"]))["provider_id"] == "ark"
+
+    async def test_scopes_to_project_when_given(self, db_session):
+        repo = TaskRepository(db_session)
+        mine = await repo.enqueue(
+            project_name="mine",
+            task_type="reference_video",
+            media_type="video",
+            resource_id="E1U1",
+            provider_id="ark",
+        )
+        theirs = await repo.enqueue(
+            project_name="theirs",
+            task_type="reference_video",
+            media_type="video",
+            resource_id="E1U1",
+            provider_id="ark",
+        )
+        await db_session.commit()
+
+        cleared = await repo.clear_queued_provider_records(media_type="video", project_name="mine")
+        assert cleared == 1
+        assert (await repo.get(mine["task_id"]))["provider_id"] is None
+        assert (await repo.get(theirs["task_id"]))["provider_id"] == "ark"
+
+    async def test_no_rows_returns_zero(self, db_session):
+        repo = TaskRepository(db_session)
+        assert await repo.clear_queued_provider_records(media_type="video") == 0

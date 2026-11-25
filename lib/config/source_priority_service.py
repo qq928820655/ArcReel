@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,6 +29,11 @@ logger = logging.getLogger(__name__)
 
 #: 解析已接入多源优先级的媒体类型。图片与文本待后续接入，见模块 docstring。
 WIRED_MEDIA_TYPES: frozenset[str] = frozenset({"video"})
+
+#: 切源后的回调：``(media_type, project_name)``，``project_name`` 为 ``None`` 表示全局作用域。
+#: 由 server 装配处注入（清空排队任务的 provider 记录需要 ``TaskRepository``，而它会把
+#: ``lib.custom_provider`` 拉进 ``lib.config`` 的依赖图，违反分层契约）。回调失败只记日志。
+SourceSwitchedCallback = Callable[[MediaType, str | None], Awaitable[None]]
 
 #: 任务类型 → 媒体类型。视频两条路线同属 video lane；tts 归 audio（不参与）。
 _TASK_MEDIA_TYPE: dict[str, MediaType] = {
@@ -86,8 +92,14 @@ def task_outcome(
 class SourcePriorityService:
     """任务终态 → 当前源推进。作为 ``GenerationWorker.outcome_listener`` 注入。"""
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        *,
+        on_source_switched: SourceSwitchedCallback | None = None,
+    ) -> None:
         self._session_factory = session_factory
+        self._on_source_switched = on_source_switched
 
     async def __call__(
         self,
@@ -127,7 +139,10 @@ class SourcePriorityService:
                 scope, project_name = state_scope(None)
             if not config.is_active:
                 return
-            await store.apply_outcome(
+            previous_index = (
+                await store.read_state(scope=scope, project_name=project_name, media_type=outcome.media_type)
+            ).active_index
+            new_index, _quota, _network = await store.apply_outcome(
                 scope=scope,
                 project_name=project_name,
                 media_type=outcome.media_type,
@@ -137,6 +152,20 @@ class SourcePriorityService:
                 succeeded=outcome.succeeded,
             )
             await session.commit()
+            if new_index != previous_index and self._on_source_switched is not None:
+                # 当前源变了：排队中的任务记的还是入队时的旧 provider，不清掉就会继续按旧源排队。
+                # 项目层配置只清本项目；回落到全局配置时清所有项目（同一份全局列表驱动它们）。
+                try:
+                    await self._on_source_switched(
+                        outcome.media_type, None if scope == "global" else outcome.project_name
+                    )
+                except Exception:
+                    logger.warning(
+                        "多源优先级切源回调失败 media=%s scope=%s",
+                        outcome.media_type,
+                        scope,
+                        exc_info=True,
+                    )
 
 
 async def _load_project(project_name: str) -> dict | None:

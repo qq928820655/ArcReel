@@ -905,11 +905,30 @@ def create_generation_worker() -> GenerationWorker:
     # 多源优先级的运行态推进挂在任务终态上：worker 只认回调协议，具体实现留在 server 侧装配，
     # 核心库不反向依赖配置服务。
     from lib.config.source_priority_service import SourcePriorityService
+    from lib.db.repositories.task_repo import TaskRepository
+
+    async def _clear_queued_after_switch(media_type: str, project_name: str | None) -> None:
+        """切源后清空排队任务的 provider 记录，让它们认领时按新源重算。
+
+        放在 server 装配处而不是服务内部：``TaskRepository`` 会把 ``lib.custom_provider`` 拉进
+        ``lib.config`` 的依赖图，违反分层契约（见 ``pyproject.toml`` 的 importlinter 契约）。
+        """
+        async with async_session_factory() as session:
+            cleared = await TaskRepository(session).clear_queued_provider_records(
+                media_type=media_type, project_name=project_name
+            )
+        if cleared:
+            logger.info(
+                "多源优先级切源后清空排队任务 provider 记录：%d 条 media=%s project=%s",
+                cleared,
+                media_type,
+                project_name or "<all>",
+            )
 
     return GenerationWorker(
         executor=execute_generation_task,
         resume_executor=execute_resume_video_task,
-        outcome_listener=SourcePriorityService(async_session_factory),
+        outcome_listener=SourcePriorityService(async_session_factory, on_source_switched=_clear_queued_after_switch),
     )
 
 

@@ -31,6 +31,7 @@ from lib.config.source_priority import (
     write_project_config,
 )
 from lib.db import get_async_session
+from lib.db.repositories.task_repo import TaskRepository
 from lib.infra.async_thread import run_sync_transaction
 from lib.project.project_change_hints import project_change_source
 from lib.project.project_manager import get_project_manager
@@ -157,6 +158,8 @@ async def select_global_source_priority(
     await store.set_active_index(
         scope=scope, project_name=scope_project, media_type=req.media_type, active_index=req.active_index
     )
+    # 手动切源同样要让排队中的任务跟随：不清掉旧 provider 记录，它们还会按旧源排队。
+    await TaskRepository(session).clear_queued_provider_records(media_type=req.media_type)
     await session.commit()
     return await get_global_source_priority(session)
 
@@ -254,5 +257,7 @@ async def select_project_source_priority(
     await store.set_active_index(
         scope=scope, project_name=scope_project, media_type=req.media_type, active_index=req.active_index
     )
+    # 只清本项目的排队任务：项目层切源不影响其它项目。
+    await TaskRepository(session).clear_queued_provider_records(media_type=req.media_type, project_name=name)
     await session.commit()
     return await get_project_source_priority(name, session)

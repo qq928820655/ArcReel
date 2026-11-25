@@ -933,6 +933,33 @@ class TaskRepository(BaseRepository):
         )
         await self.session.commit()
 
+    async def clear_queued_provider_records(
+        self,
+        *,
+        media_type: str,
+        project_name: str | None = None,
+    ) -> int:
+        """清空排队中任务的 ``provider_id`` 记录，让它们在下次认领时按项目现状重新推算。
+
+        多源优先级切换当前源后调用：排队任务的 ``provider_id`` 是入队时快照的 advisory 记录，
+        worker 的池满过滤与槽位归属都按它走，不清掉就会继续按旧源排队、旧源限流也照旧撞上去。
+        只动 ``queued``：``running`` 任务已在执行中，改记录不会改变它的执行身份，反而干扰回队
+        漂移判定。返回受影响行数。``project_name`` 给出时只清该项目的任务（项目层切换），
+        省略时清全部（全局层切换）。
+        """
+        now = utc_now()
+        conditions = [
+            Task.status == "queued",
+            Task.media_type == media_type,
+        ]
+        if project_name is not None:
+            conditions.append(Task.project_name == project_name)
+        result = await self.session.execute(
+            update(Task).where(*conditions, Task.provider_id.is_not(None)).values(provider_id=None, updated_at=now)
+        )
+        await self.session.commit()
+        return rowcount(result)
+
     async def list_orphan_tasks_on_start(self) -> list[dict[str, Any]]:
         """返回 running 状态任务用于重启自愈（ADR 0007）。"""
         result = await self.session.execute(

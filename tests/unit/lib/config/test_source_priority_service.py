@@ -305,3 +305,48 @@ async def test_non_network_non_quota_failure_ignored(db_session: AsyncSession, p
     service = await _service(db_session)
     await service(_task(), succeeded=False, exc=_http_error(400, "bad prompt"), provider_id="ark")
     assert await _state3(db_session) == (0, 0, 0)
+
+
+async def test_switching_source_invokes_switch_callback(db_session: AsyncSession, project_with_priority):
+    """切源时调用注入的切源回调，交给装配层清空排队任务的 provider 记录。"""
+    calls: list[tuple[str, str | None]] = []
+
+    async def _on_switch(media_type: str, project_name: str | None) -> None:
+        calls.append((media_type, project_name))
+
+    factory = async_sessionmaker(bind=db_session.bind, class_=AsyncSession, expire_on_commit=False)
+    service = SourcePriorityService(factory, on_source_switched=_on_switch)
+    exc = _http_error(402)
+    await service(_task(), succeeded=False, exc=exc, provider_id="ark")
+    assert calls == []  # 还没到阈值，不切
+    await service(_task(), succeeded=False, exc=exc, provider_id="ark")
+    assert await _state(db_session) == (1, 0)
+    assert calls == [("video", "demo")]
+
+
+async def test_no_switch_does_not_invoke_switch_callback(db_session: AsyncSession, project_with_priority):
+    """没发生切源时不动回调：单次失败不换源，排队任务保持原样。"""
+    calls: list[tuple[str, str | None]] = []
+
+    async def _on_switch(media_type: str, project_name: str | None) -> None:
+        calls.append((media_type, project_name))
+
+    factory = async_sessionmaker(bind=db_session.bind, class_=AsyncSession, expire_on_commit=False)
+    service = SourcePriorityService(factory, on_source_switched=_on_switch)
+    await service(_task(), succeeded=False, exc=_http_error(402), provider_id="ark")
+    assert await _state(db_session) == (0, 1)
+    assert calls == []
+
+
+async def test_switch_callback_failure_is_swallowed(db_session: AsyncSession, project_with_priority):
+    """切源回调抛错不影响推进本身：状态已落库，回调只记日志。"""
+
+    async def _boom(media_type: str, project_name: str | None) -> None:
+        raise RuntimeError("boom")
+
+    factory = async_sessionmaker(bind=db_session.bind, class_=AsyncSession, expire_on_commit=False)
+    service = SourcePriorityService(factory, on_source_switched=_boom)
+    exc = _http_error(402)
+    await service(_task(), succeeded=False, exc=exc, provider_id="ark")
+    await service(_task(), succeeded=False, exc=exc, provider_id="ark")
+    assert await _state(db_session) == (1, 0)
