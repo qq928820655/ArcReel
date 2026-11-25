@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any, Literal
@@ -40,8 +41,36 @@ PROJECT_FIELD = "source_priority"
 #: 连续几次额度不足才下移一行。1 会让一次偶发的限流误切源，2 是「确实用完了」的最小可信信号。
 QUOTA_STREAK_THRESHOLD = 2
 
+#: 连续几次「连不上供应商」才下移一行。连接失败可能是本机网络抖动、DNS 临时故障、供应商入口短暂不可达，
+#: 单次或几次不足以判定该供应商长期不可用，故取比额度更宽的阈值，避免一次网络抖动就把排好的顺序打乱。
+#: 可用环境变量 ``ARCREEL_SOURCE_PRIORITY_NETWORK_THRESHOLD`` 覆盖（正整数）。
+NETWORK_STREAK_THRESHOLD = 5
+NETWORK_STREAK_THRESHOLD_ENV = "ARCREEL_SOURCE_PRIORITY_NETWORK_THRESHOLD"
+
 #: 每日重置的时区：北京时间零点恢复首行。
 RESET_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
+
+
+def network_streak_threshold() -> int:
+    """当前生效的网络不可达阈值：环境变量给出正整数时用它，否则用默认值。
+
+    每次调用现读环境变量（而不是模块级缓存）：阈值是运维旋钮，改完重启即生效即可，无需热更新；
+    读不到或非法值一律回落到默认值，绝不让一个写错的环境变量把切换逻辑带偏。
+    """
+    raw = os.getenv(NETWORK_STREAK_THRESHOLD_ENV, "").strip()
+    if not raw:
+        return NETWORK_STREAK_THRESHOLD
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("%s 不是整数，按默认 %d 处理: %r", NETWORK_STREAK_THRESHOLD_ENV, NETWORK_STREAK_THRESHOLD, raw)
+        return NETWORK_STREAK_THRESHOLD
+    if value < 1:
+        logger.warning(
+            "%s 必须为正整数，按默认 %d 处理: %r", NETWORK_STREAK_THRESHOLD_ENV, NETWORK_STREAK_THRESHOLD, raw
+        )
+        return NETWORK_STREAK_THRESHOLD
+    return value
 
 
 def setting_key(media_type: MediaType) -> str:
@@ -127,10 +156,14 @@ class SourcePriorityConfig:
 
 @dataclass(frozen=True)
 class SourcePriorityStateRow:
-    """一行运行态。``active_index`` 可能超出配置长度（列表被改短），消费方需自行夹取。"""
+    """一行运行态。``active_index`` 可能超出配置长度（列表被改短），消费方需自行夹取。
+
+    ``quota_streak`` 与 ``network_streak`` 是两类失败各自的连续次数，分开累计、互不干扰。
+    """
 
     active_index: int = 0
     quota_streak: int = 0
+    network_streak: int = 0
     last_reset_on: date | None = None
 
 
@@ -176,29 +209,39 @@ def advance(
     entry_count: int,
     active_index: int,
     quota_streak: int,
+    network_streak: int = 0,
     quota_exhausted: bool,
+    network_unreachable: bool = False,
     succeeded: bool,
-) -> tuple[int, int]:
-    """按一次任务结果推进状态，返回新的 ``(active_index, quota_streak)``。
+    network_threshold: int | None = None,
+) -> tuple[int, int, int]:
+    """按一次任务结果推进状态，返回新的 ``(active_index, quota_streak, network_streak)``。
 
     规则（与需求逐条对应）：
 
-    - 成功：清零 streak，不换行。
-    - 额度不足：streak + 1；达到阈值时下移一行并清零，已到末行则停在末行、streak 保持。
-    - 其他失败：不动。
+    - 成功：清零两个 streak，不换行。
+    - 额度不足：quota_streak + 1；网络不可达：network_streak + 1。两类**分开计数**、互不干扰。
+    - 任一计数达到各自阈值即下移一行，并把两个计数一起清零（换到新源，两个计数都从零开始）。
+      额度阈值固定为 :data:`QUOTA_STREAK_THRESHOLD`；网络阈值默认 :data:`NETWORK_STREAK_THRESHOLD`，
+      可由 *network_threshold* 覆盖（供可配置入口与测试）。
+    - 已到末行：停住不换，计数保持以便观察；次日零点整体重置。
+    - 其他失败：两个计数都不动。
+
+    分开计数的理由：额度耗尽与网络不可达是两种独立的故障，合并计数会让「几次额度不足 + 几次断网」
+    凑够阈值而误切。各自达到阈值才切，任一触发时另一个计数已无意义（换了源），故一并清零。
     """
+    threshold_network = NETWORK_STREAK_THRESHOLD if network_threshold is None else network_threshold
     index = clamp_active_index(active_index, entry_count)
     if succeeded:
-        return index, 0
-    if not quota_exhausted:
-        return index, quota_streak
-    streak = quota_streak + 1
-    if streak < QUOTA_STREAK_THRESHOLD:
-        return index, streak
+        return index, 0, 0
+    next_quota = quota_streak + 1 if quota_exhausted else quota_streak
+    next_network = network_streak + 1 if network_unreachable else network_streak
+    if next_quota < QUOTA_STREAK_THRESHOLD and next_network < threshold_network:
+        return index, next_quota, next_network
     if index + 1 >= entry_count:
-        # 末行也用完：不再切换，streak 保持以便观察；次日零点整体重置。
-        return index, streak
-    return index + 1, 0
+        # 末行也不可用：不再切换，计数保持以便观察；次日零点整体重置。
+        return index, next_quota, next_network
+    return index + 1, 0, 0
 
 
 class SourcePriorityStore:
@@ -241,6 +284,7 @@ class SourcePriorityStore:
         return SourcePriorityStateRow(
             active_index=row.active_index,
             quota_streak=row.quota_streak,
+            network_streak=row.network_streak,
             last_reset_on=row.last_reset_on,
         )
 
@@ -252,6 +296,7 @@ class SourcePriorityStore:
         media_type: MediaType,
         active_index: int,
         quota_streak: int,
+        network_streak: int,
         last_reset_on: date | None,
     ) -> None:
         stmt = select(SourcePriorityState).where(
@@ -268,12 +313,14 @@ class SourcePriorityStore:
                     media_type=media_type,
                     active_index=active_index,
                     quota_streak=quota_streak,
+                    network_streak=network_streak,
                     last_reset_on=last_reset_on,
                 )
             )
         else:
             row.active_index = active_index
             row.quota_streak = quota_streak
+            row.network_streak = network_streak
             row.last_reset_on = last_reset_on
             row.updated_at = datetime.now(UTC)
         await self._session.flush()
@@ -281,7 +328,7 @@ class SourcePriorityStore:
     async def set_active_index(
         self, *, scope: str, project_name: str, media_type: MediaType, active_index: int
     ) -> None:
-        """用户手动点选某一行：直接切过去并清零 streak。"""
+        """用户手动点选某一行：直接切过去并清零两个 streak。"""
         current = await self.read_state(scope=scope, project_name=project_name, media_type=media_type)
         await self._upsert_state(
             scope=scope,
@@ -289,6 +336,7 @@ class SourcePriorityStore:
             media_type=media_type,
             active_index=max(0, active_index),
             quota_streak=0,
+            network_streak=0,
             last_reset_on=current.last_reset_on,
         )
 
@@ -301,35 +349,46 @@ class SourcePriorityStore:
         entry_count: int,
         quota_exhausted: bool,
         succeeded: bool,
-    ) -> tuple[int, int]:
-        """按一次任务结果推进并落库，返回新的 ``(active_index, quota_streak)``。"""
+        network_unreachable: bool = False,
+    ) -> tuple[int, int, int]:
+        """按一次任务结果推进并落库，返回新的 ``(active_index, quota_streak, network_streak)``。"""
         current = await self.read_state(scope=scope, project_name=project_name, media_type=media_type)
-        new_index, new_streak = advance(
+        new_index, new_quota, new_network = advance(
             entry_count=entry_count,
             active_index=current.active_index,
             quota_streak=current.quota_streak,
+            network_streak=current.network_streak,
             quota_exhausted=quota_exhausted,
+            network_unreachable=network_unreachable,
             succeeded=succeeded,
+            network_threshold=network_streak_threshold(),
         )
-        if (new_index, new_streak) != (current.active_index, current.quota_streak):
+        if (new_index, new_quota, new_network) != (
+            current.active_index,
+            current.quota_streak,
+            current.network_streak,
+        ):
             await self._upsert_state(
                 scope=scope,
                 project_name=project_name,
                 media_type=media_type,
                 active_index=new_index,
-                quota_streak=new_streak,
+                quota_streak=new_quota,
+                network_streak=new_network,
                 last_reset_on=current.last_reset_on,
             )
             if new_index != current.active_index:
                 logger.info(
-                    "多源优先级切换 scope=%s project=%s media=%s %d -> %d（额度不足）",
+                    "多源优先级切换 scope=%s project=%s media=%s %d -> %d（quota=%s network=%s）",
                     scope,
                     project_name,
                     media_type,
                     current.active_index,
                     new_index,
+                    quota_exhausted,
+                    network_unreachable,
                 )
-        return new_index, new_streak
+        return new_index, new_quota, new_network
 
     async def reset_if_due(self, *, today: date) -> int:
         """把所有 ``last_reset_on`` 早于 *today* 的行重置回首行，返回受影响行数。
@@ -344,6 +403,7 @@ class SourcePriorityStore:
                 continue
             row.active_index = 0
             row.quota_streak = 0
+            row.network_streak = 0
             row.last_reset_on = today
             row.updated_at = datetime.now(UTC)
             changed += 1

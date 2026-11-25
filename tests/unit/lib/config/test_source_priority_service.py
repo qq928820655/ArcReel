@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lib.config.source_priority import (
+    NETWORK_STREAK_THRESHOLD,
     SourcePriorityConfig,
     SourcePriorityEntry,
     SourcePriorityStore,
@@ -111,6 +112,12 @@ async def _state(db_session: AsyncSession) -> tuple[int, int]:
     store = SourcePriorityStore(db_session)
     row = await store.read_state(scope="project", project_name="demo", media_type="video")
     return row.active_index, row.quota_streak
+
+
+async def _state3(db_session: AsyncSession) -> tuple[int, int, int]:
+    store = SourcePriorityStore(db_session)
+    row = await store.read_state(scope="project", project_name="demo", media_type="video")
+    return row.active_index, row.quota_streak, row.network_streak
 
 
 async def test_two_quota_failures_switch_to_next_row(db_session: AsyncSession, project_with_priority):
@@ -239,3 +246,62 @@ async def test_listener_never_raises_on_internal_failure(db_session: AsyncSessio
 
     monkeypatch.setattr(service, "_apply", _boom)
     await service(_task(), succeeded=True, exc=None, provider_id="ark")
+
+
+# ---------------------------------------------------------------------------
+# 网络不可达
+# ---------------------------------------------------------------------------
+
+
+def _connect_error() -> httpx.ConnectError:
+    return httpx.ConnectError("connection refused", request=httpx.Request("POST", "https://api.example.com"))
+
+
+async def test_five_network_failures_switch_to_next_row(db_session: AsyncSession, project_with_priority):
+    """网络不可达阈值是 5 次（比额度的 2 次宽，避免一次抖动就换源）。"""
+    service = await _service(db_session)
+    exc = _connect_error()
+    for expected in range(1, NETWORK_STREAK_THRESHOLD):
+        await service(_task(), succeeded=False, exc=exc, provider_id="ark")
+        assert await _state3(db_session) == (0, 0, expected)
+    # 第 5 次达到阈值：下移一行并清零
+    await service(_task(), succeeded=False, exc=exc, provider_id="ark")
+    assert await _state3(db_session) == (1, 0, 0)
+
+
+async def test_quota_and_network_failures_count_separately(db_session: AsyncSession, project_with_priority):
+    """一次额度 + 一次断网不会凑够阈值换行；两者各自保留在各自计数里。"""
+    service = await _service(db_session)
+    await service(_task(), succeeded=False, exc=_http_error(402), provider_id="ark")
+    await service(_task(), succeeded=False, exc=_connect_error(), provider_id="ark")
+    assert await _state3(db_session) == (0, 1, 1)
+
+
+async def test_network_failure_on_last_row_stops(db_session: AsyncSession, project_with_priority):
+    service = await _service(db_session)
+    exc = _connect_error()
+    # 三行列表：推两次换行到末行（每次需要 NETWORK_STREAK_THRESHOLD 次连续失败）
+    for _ in range(NETWORK_STREAK_THRESHOLD * 2):
+        await service(_task(), succeeded=False, exc=exc, provider_id="ark")
+    assert (await _state3(db_session))[0] == 2
+    # 末行继续失败：停在末行，计数保持
+    for _ in range(NETWORK_STREAK_THRESHOLD):
+        await service(_task(), succeeded=False, exc=exc, provider_id="vidu")
+    index, _quota, network = await _state3(db_session)
+    assert index == 2
+    assert network == NETWORK_STREAK_THRESHOLD
+
+
+async def test_network_failure_task_outcome_flags(db_session: AsyncSession, project_with_priority):
+    from lib.config.source_priority_service import task_outcome
+
+    outcome = task_outcome(_task(), succeeded=False, exc=_connect_error(), provider_id="ark")
+    assert outcome is not None
+    assert outcome.network_unreachable is True
+    assert outcome.quota_exhausted is False
+
+
+async def test_non_network_non_quota_failure_ignored(db_session: AsyncSession, project_with_priority):
+    service = await _service(db_session)
+    await service(_task(), succeeded=False, exc=_http_error(400, "bad prompt"), provider_id="ark")
+    assert await _state3(db_session) == (0, 0, 0)

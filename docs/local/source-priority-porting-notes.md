@@ -50,7 +50,8 @@ server/routers/source_priority.py        # 4 个 API 端点 258 行
 ### 迁移
 
 ```
-alembic/versions/b7c1d9e4a2f3_add_source_priority_state.py
+alembic/versions/b7c1d9e4a2f3_add_source_priority_state.py   # 建表
+alembic/versions/c8e4f1a6b2d5_add_source_priority_network_streak.py  # 加 network_streak 列
 ```
 
 **升级后必须重挂迁移链**：该文件 `down_revision = "f6d2a8c4b931"`。上游若在此之后新增了迁移，
@@ -68,6 +69,8 @@ uv run alembic heads
 ```
 
 若本地库已升到 `b7c1d9e4a2f3`，改 down_revision 后不要 `downgrade`，直接 `upgrade head` 即可。
+
+**两个迁移是链式的**：`c8e4f1a6b2d5.down_revision = "b7c1d9e4a2f3"`。重挂时只需改**链头** `b7c1d9e4a2f3` 的 `down_revision` 指向上游最新 head，`c8e4f1a6b2d5` 保持在它之后，不要动。否则会再次分叉。
 
 ### 前端
 
@@ -310,3 +313,47 @@ git diff b8f24a916 a22e25352 -- lib/config/resolver.py
 # 把新增文件整体拷出（不依赖 git 历史）
 git show a22e25352:lib/config/source_priority.py > /tmp/source_priority.py
 ```
+
+---
+
+## 十、网络不可达触发（`c8e4f1a6b2d5`）
+
+与额度触发并列的第二种下移条件：当前来源**连不上**时也换下一行。
+
+### 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `lib/generation/quota_exhaustion.py` | 新增 `classify_network_unreachable()` 与 `_NETWORK_UNREACHABLE_ERRORS`（`ConnectError`/`ConnectTimeout`/`PoolTimeout`/`ProxyError`），沿 `__cause__` 因果链查 |
+| `lib/config/source_priority.py` | `advance()` 改返回三元组 `(active_index, quota_streak, network_streak)`，新增 `network_streak`/`network_unreachable`/`network_threshold` 参数；`NETWORK_STREAK_THRESHOLD=5`、`network_streak_threshold()`（每次读 env `ARCREEL_SOURCE_PRIORITY_NETWORK_THRESHOLD`）；`SourcePriorityStateRow.network_streak`；Store 全链（read/_upsert/set/apply_outcome/reset）带 `network_streak` |
+| `lib/config/source_priority_service.py` | `TaskOutcome.network_unreachable`；`task_outcome` 分判；`_apply` 传 `network_unreachable` |
+| `lib/db/models/source_priority.py` | `network_streak` 列（`server_default="0"`） |
+| `alembic/versions/c8e4f1a6b2d5_...py` | 加列迁移，`down_revision="b7c1d9e4a2f3"` |
+| 四语言 i18n | `source_priority_quota_note` 文案补网络触发说明 |
+| ADR 0121 | 新增「连不上供应商的判定」一节 |
+
+### 判定口径（改动时别放宽）
+
+- 只收**连接建立阶段**的错误（`ConnectError`/`ConnectTimeout`/`PoolTimeout`/`ProxyError`）——请求确定没送达，换源不会重复计费。
+- **不收**读超时/写错误/中途断连（请求可能已送达，换源会重复计费或轮询到别家任务）。
+- 与下游工具请求的网络异常无关。
+- 阈值 5 次，比额度的 2 次宽（连接失败可能是本机抖动/DNS/入口短暂不可达）。
+- 与额度**分开计数**，合并会误切；任一达阈值即下移并把两计数一起清零。
+
+### 验证
+
+```bash
+env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u GEMINI_API_KEY -u ARK_API_KEY \
+  uv run pytest tests/unit/lib/config/test_source_priority.py \
+  tests/unit/lib/config/test_source_priority_service.py \
+  tests/unit/lib/generation/test_quota_exhaustion.py \
+  tests/integration/lib/db/migrations/test_alembic_source_priority_state.py -q
+```
+
+### 本地库升级
+
+```bash
+uv run alembic upgrade head
+```
+
+`source_priority_state` 表会多出 `network_streak` 列，旧行默认 0，无需回填。

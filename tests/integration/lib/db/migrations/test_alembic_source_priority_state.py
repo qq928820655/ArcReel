@@ -47,3 +47,27 @@ def test_source_priority_state_table_created_and_dropped(
 
     command.downgrade(cfg, parent)
     assert "source_priority_state" not in _tables(db_path)
+
+
+def test_network_streak_column_added_and_dropped(
+    alembic_cfg: tuple[Config, Path], migration_revisions: Callable[[str], tuple[str, str]]
+):
+    """网络不可达计数列：升级到本迁移后存在，降级回父版本后消失。"""
+    cfg, db_path = alembic_cfg
+    revision, parent = migration_revisions("*_add_source_priority_network_streak.py")
+
+    command.upgrade(cfg, revision)
+    engine = sa.create_engine(f"sqlite:///{db_path}")
+    try:
+        cols = {c["name"] for c in sa.inspect(engine).get_columns("source_priority_state")}
+    finally:
+        engine.dispose()
+    assert "network_streak" in cols
+
+    command.downgrade(cfg, parent)
+    engine = sa.create_engine(f"sqlite:///{db_path}")
+    try:
+        cols = {c["name"] for c in sa.inspect(engine).get_columns("source_priority_state")}
+    finally:
+        engine.dispose()
+    assert "network_streak" not in cols

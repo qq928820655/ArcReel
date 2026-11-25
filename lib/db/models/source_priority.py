@@ -23,9 +23,10 @@ GLOBAL_PROJECT_NAME = ""
 class SourcePriorityState(Base):
     """一个 ``(作用域, 项目, 媒体类型)`` 的多源优先级运行态。
 
-    ``active_index`` 是当前生效的列表行下标；``quota_streak`` 是该行连续额度不足的次数，成功一次
-    即清零、达到阈值时下移一行并清零。``last_reset_on`` 是最近一次每日重置的北京日期，启动补偿
-    与零点任务都按它幂等——同一天重复跑不会重复推进。
+    ``active_index`` 是当前生效的列表行下标；``quota_streak`` 与 ``network_streak`` 分别是该行
+    **连续额度不足**与**连续网络不可达**的次数，分开累计、互不干扰：任一成功即清零，任一达到阈值
+    时下移一行并把两者一起清零。``last_reset_on`` 是最近一次每日重置的北京日期，启动补偿与零点
+    任务都按它幂等——同一天重复跑不会重复推进。
     """
 
     __tablename__ = "source_priority_state"
@@ -36,6 +37,7 @@ class SourcePriorityState(Base):
     media_type: Mapped[str] = mapped_column(String(16), primary_key=True)
     active_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     quota_streak: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    network_streak: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     last_reset_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now

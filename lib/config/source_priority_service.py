@@ -21,7 +21,7 @@ from lib.config.source_priority import (
     read_project_config,
     state_scope,
 )
-from lib.generation.quota_exhaustion import classify_quota_exhaustion
+from lib.generation.quota_exhaustion import classify_network_unreachable, classify_quota_exhaustion
 from lib.project.project_manager import get_project_manager
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,7 @@ class TaskOutcome:
     provider_id: str
     succeeded: bool
     quota_exhausted: bool
+    network_unreachable: bool
 
 
 def task_outcome(
@@ -70,12 +71,15 @@ def task_outcome(
     project_name = task.get("project_name")
     if not isinstance(project_name, str) or not project_name:
         return None
+    failed = not succeeded
     return TaskOutcome(
         media_type=media_type,
         project_name=project_name,
         provider_id=provider_id,
         succeeded=succeeded,
-        quota_exhausted=(not succeeded) and classify_quota_exhaustion(exc),
+        # 两类失败分开判定、分开计数：额度耗尽与网络不可达互不干扰。
+        quota_exhausted=failed and classify_quota_exhaustion(exc),
+        network_unreachable=failed and classify_network_unreachable(exc),
     )
 
 
@@ -96,8 +100,8 @@ class SourcePriorityService:
         outcome = task_outcome(task, succeeded=succeeded, exc=exc, provider_id=provider_id)
         if outcome is None or outcome.media_type not in WIRED_MEDIA_TYPES:
             return
-        if not outcome.succeeded and not outcome.quota_exhausted:
-            # 非额度类失败不推进；成功仍要清零 streak，故只有「失败且非额度」提前返回。
+        if not outcome.succeeded and not (outcome.quota_exhausted or outcome.network_unreachable):
+            # 与切换无关的失败不推进；成功仍要清零 streak，故只有「失败且两类都不是」提前返回。
             return
         try:
             await self._apply(outcome)
@@ -129,6 +133,7 @@ class SourcePriorityService:
                 media_type=outcome.media_type,
                 entry_count=len(config.entries),
                 quota_exhausted=outcome.quota_exhausted,
+                network_unreachable=outcome.network_unreachable,
                 succeeded=outcome.succeeded,
             )
             await session.commit()

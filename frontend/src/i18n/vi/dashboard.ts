@@ -4076,7 +4076,7 @@ export default {
   "source_priority_save": "Lưu",
   "source_priority_saved": "Đã lưu ưu tiên nguồn",
   "source_priority_save_failed": "Lưu thất bại: {{message}}",
-  "source_priority_quota_note": "Cần hai lần hết hạn mức liên tiếp mới chuyển nguồn; một lần giới hạn tốc độ sẽ không chuyển.",
+  "source_priority_quota_note": "Chuyển sang dòng kế tiếp sau hai lần hết hạn mức liên tiếp hoặc năm lần không kết nối được liên tiếp; một lần giới hạn tốc độ hoặc mạng chập chờn sẽ không chuyển nguồn.",
   "source_priority_text_not_wired": "Cấu hình kênh văn bản được lưu, nhưng phần tạo chưa dùng đến và vẫn theo mô hình mặc định.",
   "source_priority_image_not_wired": "Cấu hình kênh hình ảnh được lưu, nhưng phần tạo chưa dùng đến và vẫn theo mô hình mặc định.",
 } satisfies Record<keyof typeof enDashboard, string>;

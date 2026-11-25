@@ -5,7 +5,11 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from lib.generation.quota_exhaustion import classify_quota_exhaustion, is_rate_limited
+from lib.generation.quota_exhaustion import (
+    classify_network_unreachable,
+    classify_quota_exhaustion,
+    is_rate_limited,
+)
 
 
 def _http_error(
@@ -147,3 +151,59 @@ def test_cause_chain_cycle_does_not_hang():
     first.__cause__ = second
     second.__cause__ = first
     assert classify_quota_exhaustion(first) is False
+
+
+# ---------------------------------------------------------------------------
+# 网络不可达
+# ---------------------------------------------------------------------------
+
+
+def _connect_error() -> httpx.ConnectError:
+    return httpx.ConnectError("connection refused", request=httpx.Request("POST", "https://api.example.com"))
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        httpx.ConnectError("refused", request=httpx.Request("POST", "https://api.example.com")),
+        httpx.ConnectTimeout("timed out", request=httpx.Request("POST", "https://api.example.com")),
+        httpx.PoolTimeout("pool exhausted"),
+        httpx.ProxyError("proxy handshake failed"),
+    ],
+)
+def test_connection_setup_failures_are_unreachable(error):
+    assert classify_network_unreachable(error) is True
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        # 请求可能已被供应商接收：切源会导致重复计费或孤儿任务，不算不可达。
+        httpx.ReadTimeout("read timed out", request=httpx.Request("POST", "https://api.example.com")),
+        httpx.WriteError("write failed", request=httpx.Request("POST", "https://api.example.com")),
+        httpx.RemoteProtocolError("server disconnected"),
+        _http_error(500, "boom"),
+        _http_error(402, ""),
+        RuntimeError("something else"),
+    ],
+)
+def test_non_connection_errors_are_not_unreachable(error):
+    assert classify_network_unreachable(error) is False
+
+
+def test_unreachable_detected_through_cause_chain():
+    outer = RuntimeError("submit failed")
+    outer.__cause__ = _connect_error()
+    assert classify_network_unreachable(outer) is True
+
+
+def test_unreachable_ignores_none():
+    assert classify_network_unreachable(None) is False
+
+
+def test_unreachable_has_no_cycle_problem():
+    first = RuntimeError("a")
+    second = RuntimeError("b")
+    first.__cause__ = second
+    second.__cause__ = first
+    assert classify_network_unreachable(first) is False

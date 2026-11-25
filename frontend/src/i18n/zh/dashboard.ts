@@ -4075,7 +4075,7 @@ export default {
   "source_priority_save": "保存",
   "source_priority_saved": "多源优先级已保存",
   "source_priority_save_failed": "保存失败：{{message}}",
-  "source_priority_quota_note": "连续两次额度不足才会切换，单次限流不会换源。",
+  "source_priority_quota_note": "连续两次额度不足、或连续五次连不上当前来源时切换到下一行；单次限流或偶发断网不会换源。",
   "source_priority_text_not_wired": "文本通道的配置会保存，但生成暂未接入，当前仍按默认模型执行。",
   "source_priority_image_not_wired": "图片通道的配置会保存，但生成暂未接入，当前仍按默认模型执行。",
 } satisfies Record<keyof typeof enDashboard, string>;

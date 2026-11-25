@@ -4076,7 +4076,7 @@ export default {
   "source_priority_save": "Save",
   "source_priority_saved": "Source priority saved",
   "source_priority_save_failed": "Save failed: {{message}}",
-  "source_priority_quota_note": "Switching requires two consecutive quota failures; a single rate limit will not switch sources.",
+  "source_priority_quota_note": "Switches to the next row after two consecutive quota failures or five consecutive connection failures; a single rate limit or brief network blip will not switch sources.",
   "source_priority_text_not_wired": "Text channel settings are saved, but generation does not use them yet and still follows the default model.",
   "source_priority_image_not_wired": "Image channel settings are saved, but generation does not use them yet and still follows the default model.",
 };

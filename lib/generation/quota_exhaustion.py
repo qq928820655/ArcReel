@@ -17,6 +17,8 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 
+import httpx
+
 #: 额度/余额不足的文案关键词，中英双语。判定前统一转小写。
 QUOTA_EXHAUSTION_KEYWORDS: tuple[str, ...] = (
     # 中文
@@ -153,3 +155,27 @@ def classify_quota_exhaustion(exc: BaseException | str | None) -> bool:
 def is_rate_limited(exc: BaseException) -> bool:
     """异常链上是否有 429：供诊断区分「限流」与「额度耗尽」，两者对多源优先级的处理不同。"""
     return any(_http_status(candidate) == _RATE_LIMITED for candidate in _cause_chain(exc))
+
+
+#: 「提供商网络不可达」：连接建立阶段就失败、请求确定没送到供应商。
+#:
+#: 与 ``lib.backends.backend_runtime._NOT_SENT_TRANSPORT_ERRORS`` 同源、同口径——那里用它判「重试是否
+#: 安全」（没送到就不会重复计费），这里用它判「是否该切到下一个源」。刻意只收连接建立失败：
+#: 读超时 / 写错误 / 中途断连的请求可能已被供应商接收，切源会导致重复计费或孤儿任务。
+_NETWORK_UNREACHABLE_ERRORS: tuple[type[BaseException], ...] = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+    httpx.ProxyError,
+)
+
+
+def classify_network_unreachable(exc: BaseException | None) -> bool:
+    """这次失败是否属于「提供商网络不可达」——连接根本没建立起来。
+
+    沿显式因果链查找：只要链上有任一环节是连接建立类传输错误即成立。取向上与额度判定一致，
+    宁可漏判不可误判——把供应商其实可用的情况误判成断网，会在用户不知情时换源。
+    """
+    if exc is None:
+        return False
+    return any(isinstance(candidate, _NETWORK_UNREACHABLE_ERRORS) for candidate in _cause_chain(exc))
