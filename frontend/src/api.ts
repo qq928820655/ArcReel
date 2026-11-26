@@ -52,6 +52,8 @@ import type {
   SourcePriorityPatch,
   SourcePriorityResponse,
   SourcePriorityMediaType,
+  VideoSourcePool,
+  VideoSourcePoolInput,
   ApiKeyInfo,
   AssetLibraryAccount,
   AssetLibraryAccountList,
@@ -633,6 +635,34 @@ class API {
       method: "POST",
       body: JSON.stringify({ media_type, active_index }),
     });
+  }
+
+  // ==================== 视频汇总源 ====================
+
+  /** 列出所有汇总源。 */
+  static async listSourcePools(options: { signal?: AbortSignal } = {}): Promise<VideoSourcePool[]> {
+    return this.request("/system/source-pools", { signal: options.signal });
+  }
+
+  /** 新建汇总源。 */
+  static async createSourcePool(input: VideoSourcePoolInput): Promise<VideoSourcePool> {
+    return this.request("/system/source-pools", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  /** 更新汇总源（整份替换名称、开关与成员列表）。 */
+  static async updateSourcePool(id: number, input: VideoSourcePoolInput): Promise<VideoSourcePool> {
+    return this.request(`/system/source-pools/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  }
+
+  /** 删除汇总源。 */
+  static async deleteSourcePool(id: number): Promise<{ deleted: boolean }> {
+    return this.request(`/system/source-pools/${id}`, { method: "DELETE" });
   }
 
   // ==================== 项目管理 ====================

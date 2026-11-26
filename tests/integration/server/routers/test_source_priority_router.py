@@ -120,6 +120,10 @@ def test_project_config_overrides_global(priority_app):
     # 只配了 video，image / text 仍回落全局，故整体 scope 是 mixed。
     assert body["scope"] == "mixed"
     assert body["video"]["entries"][0]["provider_id"] == "p"
+    # 每通道的来源：video 由本项目拥有，image / text 回落全局。前端据此决定点行时是否先落本项目配置。
+    assert body["video"]["source"] == "project"
+    assert body["image"]["source"] == "global"
+    assert body["text"]["source"] == "global"
 
 
 def test_project_can_clear_channel_to_fall_back_to_global(priority_app):

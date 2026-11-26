@@ -59,6 +59,9 @@ class SourcePriorityChannelView(BaseModel):
     active_index: int
     #: 当前是否由本层配置驱动生成（开关打开且有至少一行）。
     active: bool
+    #: 这份数据来自哪一层（``project`` / ``global``）。项目层未配置该通道而回落全局时标 ``global``，
+    #: 前端据此判断「点行启用」是否要先落本项目配置，避免直接打 select 端点拿到 409。
+    source: str
 
 
 class SourcePriorityResponse(BaseModel):
@@ -70,7 +73,7 @@ class SourcePriorityResponse(BaseModel):
     text: SourcePriorityChannelView
 
 
-def _channel_view(config: SourcePriorityConfig, active_index: int) -> SourcePriorityChannelView:
+def _channel_view(config: SourcePriorityConfig, active_index: int, *, source: str) -> SourcePriorityChannelView:
     count = len(config.entries)
     index = clamp_active_index(active_index, count) if count else 0
     return SourcePriorityChannelView(
@@ -78,6 +81,7 @@ def _channel_view(config: SourcePriorityConfig, active_index: int) -> SourcePrio
         entries=[SourcePriorityEntryPayload(**entry.to_payload()) for entry in config.entries],
         active_index=index,
         active=config.is_active,
+        source=source,
     )
 
 
@@ -113,7 +117,7 @@ async def get_global_source_priority(
     views: dict[str, SourcePriorityChannelView] = {}
     for media in SOURCE_PRIORITY_MEDIA_TYPES:
         state = await store.read_state(scope=scope, project_name=scope_project, media_type=media)
-        views[media] = _channel_view(configs[media], state.active_index)
+        views[media] = _channel_view(configs[media], state.active_index, source="global")
     return SourcePriorityResponse(scope="global", **views)
 
 
@@ -201,11 +205,11 @@ async def get_project_source_priority(
         project_config = read_project_config(project, media)
         if project_config.is_active:
             state = await store.read_state(scope=project_scope, project_name=project_scope_name, media_type=media)
-            views[media] = _channel_view(project_config, state.active_index)
+            views[media] = _channel_view(project_config, state.active_index, source="project")
             scopes.add("project")
         else:
             state = await store.read_state(scope=global_scope, project_name=global_scope_name, media_type=media)
-            views[media] = _channel_view(global_configs[media], state.active_index)
+            views[media] = _channel_view(global_configs[media], state.active_index, source="global")
             scopes.add("global")
     scope_label = "project" if scopes == {"project"} else ("global" if scopes == {"global"} else "mixed")
     return SourcePriorityResponse(scope=scope_label, **views)

@@ -191,13 +191,26 @@ export function SourcePrioritySection({ scope, projectName }: SourcePrioritySect
   };
 
   const selectRow = async (media: SourcePriorityMediaType, index: number) => {
+    if (!drafts) return;
     try {
-      const res =
-        scope === "global"
-          ? await API.selectGlobalSourcePriority(media, index)
-          : await API.selectProjectSourcePriority(projectName ?? "", media, index);
+      let res: SourcePriorityResponse;
+      if (scope === "global") {
+        res = await API.selectGlobalSourcePriority(media, index);
+      } else {
+        // 项目层点行启用时，若该通道当前仍回落全局（本项目未拥有），先按当前显示的列表落成本项目
+        // 配置并启用，再切行——否则 select 端点会以 409 拒绝（该通道由全局驱动，请在全局层切换）。
+        // 点行时 dirty 必为 false（按钮在 dirty 时禁用），draft 与所显示列表一致，落库内容即所见。
+        if (response?.[media].source !== "project") {
+          await API.updateProjectSourcePriority(projectName ?? "", {
+            [media]: channelFromDraft({ ...drafts[media], enabled: true }),
+          });
+        }
+        res = await API.selectProjectSourcePriority(projectName ?? "", media, index);
+      }
       setResponse(res);
-      // 切行只改运行态，不动编辑中的列表：保留用户未保存的改动。
+      const next = draftsFrom(res);
+      setDrafts(next);
+      setBaseline(next);
     } catch (error) {
       setSaveError(errMsg(error));
     }

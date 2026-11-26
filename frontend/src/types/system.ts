@@ -207,6 +207,8 @@ export interface SourcePriorityChannelView {
   active_index: number;
   /** 开关打开且有至少一行时为真，即当前由本层配置驱动生成。 */
   active: boolean;
+  /** 这份数据来自哪一层。项目层未配置该通道而回落全局时为 `global`。 */
+  source: "project" | "global";
 }
 
 /** 三类通道的配置与运行态。`scope` 标明这份数据来自哪一层；项目层部分通道回落全局时为 `mixed`。 */
@@ -225,3 +227,29 @@ export interface SourcePriorityPatch {
 }
 
 export type SourcePriorityMediaType = "video" | "image" | "text";
+
+// ==================== 视频汇总源 ====================
+
+/** 汇总源成员：指向一个已配置的视频模型。 */
+export interface VideoSourcePoolMember {
+  position: number;
+  provider_id: string;
+  model_id: string;
+}
+
+/** 一个汇总源：对外是虚拟 provider `pool-<id>`，模型名用户自定。 */
+export interface VideoSourcePool {
+  id: number;
+  /** 虚拟 provider id，形如 `pool-1`；可直接用于默认模型与多源优先级的 `provider_id`。 */
+  provider_id: string;
+  name: string;
+  enabled: boolean;
+  members: VideoSourcePoolMember[];
+}
+
+/** 新建/更新汇总源的请求体。成员顺序即分配时的 position 顺序。 */
+export interface VideoSourcePoolInput {
+  name: string;
+  enabled: boolean;
+  members: { provider_id: string; model_id: string }[];
+}
