@@ -185,10 +185,7 @@ class SourcePoolRepository(BaseRepository):
 
         task_ids = [task.task_id for task, _ in rows]
         aggregates = await self._call_aggregates(task_ids)
-        items = [
-            self._pool_task_row(task, pool_name, aggregates.get(task.task_id))
-            for task, pool_name in rows
-        ]
+        items = [self._pool_task_row(task, pool_name, aggregates.get(task.task_id)) for task, pool_name in rows]
         return {"items": items, "total": total, "page": page, "page_size": page_size}
 
     async def _call_aggregates(self, task_ids: list[str]) -> dict[str, tuple[int, int, int, object]]:

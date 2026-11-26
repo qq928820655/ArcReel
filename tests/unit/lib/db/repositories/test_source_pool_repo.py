@@ -172,7 +172,9 @@ class TestPoolTaskMonitor:
     async def test_lists_pool_tasks_with_real_member_and_call_aggregates(self, db_session):
         repo = SourcePoolRepository(db_session)
         pool = await repo.create_pool(name="主池")
-        await self._seed_task(db_session, "t1", source_pool_id=pool.id, provider_id="custom-5", payload_model="seedance-2.0")
+        await self._seed_task(
+            db_session, "t1", source_pool_id=pool.id, provider_id="custom-5", payload_model="seedance-2.0"
+        )
         await self._seed_task(db_session, "t2", source_pool_id=None, provider_id="custom-2", payload_model="x")
         await self._seed_call(db_session, task_id="t1", status="success")
         await self._seed_call(db_session, task_id="t1", status="failed")

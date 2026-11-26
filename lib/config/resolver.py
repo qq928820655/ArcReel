@@ -1048,6 +1048,7 @@ class ConfigResolver:
         from lib.custom_provider.endpoint_resolution import resolve_endpoint_spec
         from lib.custom_provider.model_facts import video_model_facts
         from lib.db.repositories.custom_endpoint_repo import CustomEndpointRepository
+
         async with self._open_session() as (session, _svc):
             try:
                 model = await CustomProviderRepository(session).get_model_by_ids(
