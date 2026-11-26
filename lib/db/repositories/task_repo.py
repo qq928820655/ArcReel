@@ -980,7 +980,9 @@ class TaskRepository(BaseRepository):
 
         两个桶键都钉成同一成员：认领时算不出执行侧最终落 i2v 还是 r2v（参考生视频按单元实际参考图分流），
         而池成员选择只按 provider 容量、与桶无关，故同一成员对两桶都成立。执行侧命中任一桶即用该身份。
-        只改写 ``queued`` 行：认领后翻 running 前的这一瞬；已是 running 说明另有分配，不覆盖。
+        ``status IN ('queued', 'running')``：``claim_next`` 已先把任务翻成 running 并提交，展开发生在
+        认领之后，故此刻必为 running；只认 queued 会让更新命中 0 行、身份钉不进去（执行层仍按池重解析、
+        查不到 builtin spec 而失败）。已进入终态（succeeded/failed/cancelled）的行不覆盖，避免回写旧值。
         """
         now = utc_now()
         result = await self.session.execute(select(Task.payload_json).where(Task.task_id == task_id))
@@ -993,7 +995,7 @@ class TaskRepository(BaseRepository):
         payload["video_provider_r2v"] = pair
         await self.session.execute(
             update(Task)
-            .where(Task.task_id == task_id, Task.status == "queued")
+            .where(Task.task_id == task_id, Task.status.in_(("queued", "running")))
             .values(
                 provider_id=provider_id,
                 source_pool_id=source_pool_id,

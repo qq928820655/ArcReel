@@ -452,3 +452,56 @@ class TestClearQueuedProviderRecords:
     async def test_no_rows_returns_zero(self, db_session):
         repo = TaskRepository(db_session)
         assert await repo.clear_queued_provider_records(media_type="video") == 0
+
+    async def test_pin_pool_execution_identity_works_after_claim_flips_running(self, db_session):
+        """回归：认领先把任务翻成 running，展开钉身份发生在认领之后。
+
+        早期实现只更新 ``status='queued'`` 行，认领后必命中 0 行，身份钉不进去——执行层拿虚拟
+        ``pool-1`` 去查内置供应商直接失败。认领后仍须能钉住真实成员、payload 双桶键与 source_pool_id。
+        """
+        repo = TaskRepository(db_session)
+        t = await repo.enqueue(
+            project_name="demo",
+            task_type="video",
+            media_type="video",
+            resource_id="r-pool",
+            payload={},
+            script_file="ep1.json",
+            provider_id="pool-1",
+        )
+        claimed = await repo.claim_next("video")
+        assert claimed is not None and claimed["status"] == "running"
+
+        await repo.pin_pool_execution_identity(
+            t["task_id"], provider_id="custom-10", model_id="seedance-2.0-mini", source_pool_id=1
+        )
+
+        refreshed = await repo.get(t["task_id"])
+        assert refreshed["provider_id"] == "custom-10"
+        assert refreshed["source_pool_id"] == 1
+        assert refreshed["payload"]["video_provider_i2v"] == "custom-10/seedance-2.0-mini"
+        assert refreshed["payload"]["video_provider_r2v"] == "custom-10/seedance-2.0-mini"
+
+    async def test_pin_pool_execution_identity_skips_terminal_rows(self, db_session):
+        """已落终态的行不回写旧身份，避免把失败/取消的任务改回 running 语义的成员。"""
+        repo = TaskRepository(db_session)
+        t = await repo.enqueue(
+            project_name="demo",
+            task_type="video",
+            media_type="video",
+            resource_id="r-done",
+            payload={},
+            script_file="ep1.json",
+            provider_id="pool-1",
+        )
+        await repo.claim_next("video")
+        await repo.mark_failed(t["task_id"], "boom")
+
+        await repo.pin_pool_execution_identity(
+            t["task_id"], provider_id="custom-10", model_id="m", source_pool_id=1
+        )
+
+        refreshed = await repo.get(t["task_id"])
+        assert refreshed["status"] == "failed"
+        assert refreshed["provider_id"] == "pool-1"
+        assert refreshed["source_pool_id"] is None
