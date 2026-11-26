@@ -4226,4 +4226,8 @@ export default {
   "source_pool_save": "Сохранить",
   "source_pool_name_required": "Укажите название сводного источника",
   "source_pool_members_required": "Добавьте хотя бы одну модель-участника",
+  "source_pool_saved": "Сводный источник сохранён",
+  "source_pool_save_failed": "Не удалось сохранить сводный источник: {{message}}",
+  "source_pool_deleted": "Сводный источник удалён",
+  "source_pool_delete_failed": "Не удалось удалить сводный источник: {{message}}",
 } satisfies Record<keyof typeof enDashboard, string> & Record<string, string>;

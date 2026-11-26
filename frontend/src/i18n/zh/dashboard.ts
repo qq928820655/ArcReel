@@ -4098,4 +4098,8 @@ export default {
   "source_pool_save": "保存",
   "source_pool_name_required": "请填写汇总源名称",
   "source_pool_members_required": "请至少添加一个成员模型",
+  "source_pool_saved": "汇总源已保存",
+  "source_pool_save_failed": "汇总源保存失败：{{message}}",
+  "source_pool_deleted": "汇总源已删除",
+  "source_pool_delete_failed": "汇总源删除失败：{{message}}",
 } satisfies Record<keyof typeof enDashboard, string>;

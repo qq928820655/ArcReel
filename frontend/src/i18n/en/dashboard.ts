@@ -4099,4 +4099,8 @@ export default {
   "source_pool_save": "Save",
   "source_pool_name_required": "Enter a pool name",
   "source_pool_members_required": "Add at least one member model",
+  "source_pool_saved": "Source pool saved",
+  "source_pool_save_failed": "Failed to save source pool: {{message}}",
+  "source_pool_deleted": "Source pool deleted",
+  "source_pool_delete_failed": "Failed to delete source pool: {{message}}",
 };

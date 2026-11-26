@@ -4099,4 +4099,8 @@ export default {
   "source_pool_save": "Lưu",
   "source_pool_name_required": "Hãy nhập tên nguồn tổng hợp",
   "source_pool_members_required": "Hãy thêm ít nhất một mô hình thành viên",
+  "source_pool_saved": "Đã lưu nguồn tổng hợp",
+  "source_pool_save_failed": "Lưu nguồn tổng hợp thất bại: {{message}}",
+  "source_pool_deleted": "Đã xóa nguồn tổng hợp",
+  "source_pool_delete_failed": "Xóa nguồn tổng hợp thất bại: {{message}}",
 } satisfies Record<keyof typeof enDashboard, string>;

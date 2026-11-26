@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { ArrowDown, ArrowUp, Loader2, Plus, Trash2 } from "lucide-react";
 
 import { API } from "@/api";
+import { useAppStore } from "@/stores/app-store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -133,8 +134,10 @@ export function SourcePoolSection() {
       );
       // 池会作为视频候选出现，保存后重取候选让默认模型/多源优先级下拉立即看到。
       void reloadCandidates();
+      useAppStore.getState().pushToast(t("source_pool_saved"), "success");
     } catch (error) {
       setActionError(errMsg(error));
+      useAppStore.getState().pushToast(t("source_pool_save_failed", { message: errMsg(error) }), "error");
     } finally {
       setBusyKey(null);
     }
@@ -151,8 +154,10 @@ export function SourcePoolSection() {
       await API.deleteSourcePool(draft.id);
       setPools((prev) => (prev ? prev.filter((p) => p.key !== draft.key) : prev));
       void reloadCandidates();
+      useAppStore.getState().pushToast(t("source_pool_deleted"), "success");
     } catch (error) {
       setActionError(errMsg(error));
+      useAppStore.getState().pushToast(t("source_pool_delete_failed", { message: errMsg(error) }), "error");
     } finally {
       setBusyKey(null);
     }
