@@ -69,3 +69,52 @@ async def test_pool_bucket_gate_uses_reference_member(db_engine):
         with pytest.raises(VideoBucketCapabilityError) as exc:
             await resolver._ensure_video_bucket_capability(session, ProviderModel(f"pool-{pid}", "aggregate"), "i2v")
         assert exc.value.provider_id == f"pool-{pid}"
+
+
+@pytest.mark.asyncio
+async def test_pool_overrides_apply_on_top_of_reference(db_engine):
+    """池自己的 capability_overrides 整维覆盖参考成员的能力；未覆盖维度沿用参考成员。"""
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as s:
+        repo = SourcePoolRepository(s)
+        pool = await repo.create_pool(
+            name="p",
+            capability_overrides={"durations": [5, 10], "resolutions": ["720p"], "audio_track": "always_on"},
+        )
+        await repo.replace_members(pool.id, [("gemini-vertex", "veo-3.1-generate-001")])
+        await s.commit()
+        pid = pool.id
+
+    resolver = ConfigResolver(factory)
+    caps = await resolver.video_capabilities_for_model(f"pool-{pid}", "aggregate", None, generation_type="i2v")
+    assert caps["provider_id"] == f"pool-{pid}"
+    # 覆盖生效
+    assert caps["supported_durations"] == [5, 10]
+    assert caps["max_duration"] == 10
+    assert caps["resolutions"] == ["720p"]
+    assert caps["has_audio"] is True
+    # 未覆盖维度沿用参考成员（veo 支持首帧）
+    assert caps["first_frame"] is True
+
+
+@pytest.mark.asyncio
+async def test_pool_override_durations_narrow_via_constraints(db_engine):
+    """池覆盖的时长联动约束经 video_duration_constraints 生效（请求事实据此收窄）。"""
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as s:
+        repo = SourcePoolRepository(s)
+        pool = await repo.create_pool(
+            name="p",
+            capability_overrides={
+                "durations": [4, 6, 8],
+                "duration_constraints": {"by_resolution": {"1080p": [4, 6]}, "with_reference_images": []},
+            },
+        )
+        await repo.replace_members(pool.id, [("gemini-vertex", "veo-3.1-generate-001")])
+        await s.commit()
+        pid = pool.id
+
+    resolver = ConfigResolver(factory)
+    constraints = await resolver.video_duration_constraints(f"pool-{pid}", "aggregate")
+    assert constraints is not None
+    assert constraints.by_resolution.get("1080p") == (4, 6)

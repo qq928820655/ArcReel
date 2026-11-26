@@ -75,6 +75,21 @@ class SourcePoolRepository(BaseRepository):
             return None
         return members[0].provider_id, members[0].model_id
 
+    async def capability_spec(self, pool_id: int) -> tuple[tuple[str, str], dict[str, object]] | None:
+        """池的能力参考成员与池自身的能力覆盖 ``((provider_id, model_id), overrides)``。
+
+        参考成员给原值，``overrides`` 是用户在池上整维覆盖的稀疏字典（键缺席即跟随成员）。
+        池不存在或无成员时返回 ``None``。
+        """
+        pool = await self.get_pool(pool_id)
+        if pool is None:
+            return None
+        member = await self.capability_member(pool_id)
+        if member is None:
+            return None
+        overrides = pool.capability_overrides if isinstance(pool.capability_overrides, dict) else {}
+        return member, overrides
+
     async def list_all_members(self) -> list[VideoSourcePoolMember]:
         """一次取回全部成员（worker 装载内存池表用，避免按池 N 次查询）。"""
         stmt = select(VideoSourcePoolMember).order_by(VideoSourcePoolMember.pool_id, VideoSourcePoolMember.position)
@@ -87,6 +102,7 @@ class SourcePoolRepository(BaseRepository):
         model_name: str | None = None,
         capability_provider_id: str | None = None,
         capability_model_id: str | None = None,
+        capability_overrides: dict[str, object] | None = None,
         enabled: bool = True,
     ) -> VideoSourcePool:
         pool = VideoSourcePool(
@@ -94,6 +110,7 @@ class SourcePoolRepository(BaseRepository):
             model_name=model_name,
             capability_provider_id=capability_provider_id,
             capability_model_id=capability_model_id,
+            capability_overrides=capability_overrides,
             enabled=enabled,
         )
         self.session.add(pool)

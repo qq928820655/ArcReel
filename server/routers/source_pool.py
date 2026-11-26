@@ -39,6 +39,8 @@ class PoolPayload(BaseModel):
     # 能力参考成员：空则取 position=0 的首个成员。
     capability_provider_id: str | None = None
     capability_model_id: str | None = None
+    # 池自己的能力覆盖（稀疏）：参考成员只提供原值，用户可在其上整维覆盖。
+    capability_overrides: dict[str, object] | None = None
     enabled: bool = True
     members: list[PoolMemberPayload] = Field(default_factory=list)
 
@@ -56,6 +58,7 @@ class PoolView(BaseModel):
     model_name: str | None
     capability_provider_id: str | None
     capability_model_id: str | None
+    capability_overrides: dict[str, object] | None
     enabled: bool
     members: list[PoolMemberView]
 
@@ -98,6 +101,7 @@ async def _view(
         model_name=pool.model_name,
         capability_provider_id=pool.capability_provider_id,
         capability_model_id=pool.capability_model_id,
+        capability_overrides=pool.capability_overrides if isinstance(pool.capability_overrides, dict) else None,
         enabled=pool.enabled,
         members=[PoolMemberView(position=m.position, provider_id=m.provider_id, model_id=m.model_id) for m in members],
     )
@@ -130,6 +134,7 @@ async def create_source_pool(body: PoolPayload, session: AsyncSession = Depends(
         model_name=body.model_name,
         capability_provider_id=body.capability_provider_id,
         capability_model_id=body.capability_model_id,
+        capability_overrides=body.capability_overrides,
         enabled=body.enabled,
     )
     await repo.replace_members(pool.id, [(m.provider_id, m.model_id) for m in body.members])
@@ -152,6 +157,7 @@ async def update_source_pool(
     pool.model_name = body.model_name
     pool.capability_provider_id = body.capability_provider_id
     pool.capability_model_id = body.capability_model_id
+    pool.capability_overrides = body.capability_overrides
     pool.enabled = body.enabled
     await repo.replace_members(pool_id, [(m.provider_id, m.model_id) for m in body.members])
     await session.commit()
@@ -167,6 +173,75 @@ async def delete_source_pool(pool_id: int, session: AsyncSession = Depends(get_a
     await repo.delete_pool(pool_id)
     await session.commit()
     return {"deleted": True}
+
+
+class PoolCapabilityView(BaseModel):
+    """池的「这个来源支持的参数」视图：与原值、池覆盖、生效值。形状对齐前端 ProviderModelCapabilities。"""
+
+    media_type: str = "video"
+    editable: list[str]
+    displayed: list[str]
+    base: dict[str, object]
+    overrides: dict[str, object]
+    effective: dict[str, object]
+
+
+@router.get("/system/source-pools/{pool_id}/capabilities", response_model=PoolCapabilityView)
+async def get_source_pool_capabilities(
+    pool_id: int, session: AsyncSession = Depends(get_async_session)
+) -> PoolCapabilityView:
+    """池自己的能力视图：``base`` 是参考成员解析出的原值，``overrides`` 是池的整维覆盖，
+    ``effective`` 是叠加后的生效值。前端据此渲染能力编辑器，语义与自定义供应商模型一致。"""
+    from lib.config.resolver import ConfigResolver
+    from lib.custom_provider.capability_view import (
+        CHANNEL_FACT_OVERRIDE_KEYS,
+        OVERRIDE_KEY_ORDER,
+        overridable_keys,
+    )
+    from lib.db import async_session_factory
+
+    def _order(keys: set[str] | frozenset[str]) -> list[str]:
+        return [key for key in OVERRIDE_KEY_ORDER if key in keys]
+
+    repo = SourcePoolRepository(session)
+    pool = await repo.get_pool(pool_id)
+    if pool is None:
+        raise NotFoundError("source_pool_not_found", pool_id=pool_id)
+    spec = await repo.capability_spec(pool_id)
+    if spec is None:
+        raise BadRequestError("source_pool_no_members")
+    (ref_provider_id, ref_model_id), raw_overrides = spec
+
+    # 参考成员解析出的能力即池的原值（不含池覆盖，故直接解析参考成员身份，不走池身份）。
+    resolver = ConfigResolver(async_session_factory, _bound_session=session)
+    caps = await resolver.video_capabilities_for_model(ref_provider_id, ref_model_id, None, generation_type="i2v")
+    base: dict[str, object] = {
+        "durations": list(caps.get("supported_durations") or []),
+        "resolutions": caps.get("resolutions"),
+        "duration_constraints": caps.get("duration_constraints"),
+    }
+    for key in CHANNEL_FACT_OVERRIDE_KEYS:
+        if key in caps:
+            base[key] = caps[key]
+    # 音轨形态按两条执行路径各自取参考成员的值（同一模型两条路径可以不同）。
+    # 参考成员没有音轨信号时按「假定有声、开关可控」显示，与自定义供应商能力视图同口径。
+    base["audio_track"] = (
+        await resolver.video_audio_track(ref_provider_id, ref_model_id, generation_type="i2v")
+    ) or "controllable"
+    base["reference_route_audio_track"] = (
+        await resolver.video_audio_track(ref_provider_id, ref_model_id, generation_type="r2v")
+    ) or "controllable"
+
+    editable = _order(overridable_keys("video"))
+    overrides = dict(raw_overrides) if isinstance(raw_overrides, dict) else {}
+    return PoolCapabilityView(
+        media_type="video",
+        editable=editable,
+        displayed=_order({*editable, *base}),
+        base=base,
+        overrides=overrides,
+        effective={**base, **overrides},
+    )
 
 
 class PoolTaskView(BaseModel):

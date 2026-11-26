@@ -132,3 +132,28 @@ def test_monitor_lists_only_pool_tasks_with_member_and_calls(pool_app, db_factor
     assert item["provider_id"] == "gemini-vertex"
     assert item["model_id"] == "veo-3.1-generate-001"
     assert (item["call_count"], item["success_count"]) == (1, 1)
+
+
+def test_capabilities_view_reports_base_overrides_and_effective(pool_app):
+    created = pool_app.post("/api/v1/system/source-pools", json=_pool_body()).json()
+    pool_id = created["id"]
+    overrides = {"durations": [4, 8, 12]}
+    resp = pool_app.put(
+        f"/api/v1/system/source-pools/{pool_id}",
+        json={**_pool_body(), "capability_overrides": overrides},
+    )
+    assert resp.status_code == 200, resp.text
+
+    view = pool_app.get(f"/api/v1/system/source-pools/{pool_id}/capabilities").json()
+    assert view["media_type"] == "video"
+    assert "durations" in view["editable"]
+    # base 来自参考成员的原值（未被池覆盖污染）
+    assert view["base"]["durations"] != [4, 8, 12]
+    assert view["overrides"]["durations"] == [4, 8, 12]
+    # effective 是叠加后的值
+    assert view["effective"]["durations"] == [4, 8, 12]
+
+
+def test_capabilities_view_404_for_unknown_pool(pool_app):
+    resp = pool_app.get("/api/v1/system/source-pools/99999/capabilities")
+    assert resp.status_code == 404

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint
+from sqlalchemy import JSON, Date, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from lib.db.base import Base, utc_now
@@ -33,6 +33,9 @@ class VideoSourcePool(Base):
     # 能力参考成员：池是虚拟 provider，能力解析无从收敛，取此成员的能力回填。空则取 position=0 的首个成员。
     capability_provider_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     capability_model_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # 池自己的能力覆盖（稀疏）：参考成员只提供原值，用户可在其上整维覆盖，语义与自定义供应商模型的
+    # capability_overrides 相同。键缺席即该维度跟随参考成员，出现即整维替换。
+    capability_overrides: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
     enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(

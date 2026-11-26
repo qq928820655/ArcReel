@@ -552,6 +552,20 @@ def constrain_durations(
     )
 
 
+def _constraints_from_payload(raw: dict) -> DurationConstraints:
+    """把能力覆盖里的 ``duration_constraints`` 字典还原成 ``DurationConstraints``。"""
+    by_resolution = raw.get("by_resolution")
+    with_ref = raw.get("with_reference_images")
+    return DurationConstraints(
+        by_resolution=(
+            {str(res).strip().lower(): tuple(int(d) for d in allowed) for res, allowed in by_resolution.items()}
+            if isinstance(by_resolution, dict)
+            else {}
+        ),
+        with_reference_images=tuple(int(d) for d in with_ref) if isinstance(with_ref, list) else (),
+    )
+
+
 def builtin_duration_constraints(provider_id: str | None, model_id: str | None) -> DurationConstraints | None:
     """内置型号在目录上声明的时长联动约束；型号不在目录中时为 None。"""
     model_info = catalog.get_model(provider_id, model_id) if provider_id and model_id else None
@@ -892,6 +906,17 @@ class ConfigResolver:
         from_project = _resolution_from_project(project, provider_id, model_id)
         if from_project:
             return from_project
+        if is_source_pool_provider(provider_id):
+            # 池自身没有 resolution 默认；取参考成员的默认档（与能力展示同源）。
+            from lib.config.source_pool import parse_pool_provider_id
+            from lib.db.repositories.source_pool_repo import SourcePoolRepository
+
+            async with self._open_session() as (session, _svc):
+                spec = await SourcePoolRepository(session).capability_spec(parse_pool_provider_id(provider_id))
+            if spec is None:
+                return None
+            ref_provider_id, ref_model_id = spec[0]
+            return await self.resolve_resolution(project, ref_provider_id, ref_model_id)
         # 仅自定义供应商才有 DB 侧默认；预置供应商在此直接 None，避免为热路径上的
         # 每次生成任务白开一个 session（原独立模块正是先判 is_custom_provider 再触 DB）。
         if not provider_id or not model_id or not is_custom_provider(provider_id):
@@ -1004,12 +1029,25 @@ class ConfigResolver:
         时长只从节点绑定推导，没有联动约束。模型行或端点解析不出时为 None：引用失效由能力解析报错，
         这里不重复。
         """
+        if is_source_pool_provider(provider_id):
+            # 池的约束：池覆盖优先，否则取参考成员的约束。
+            from lib.config.source_pool import parse_pool_provider_id
+            from lib.db.repositories.source_pool_repo import SourcePoolRepository
+
+            async with self._open_session() as (session, _svc):
+                spec = await SourcePoolRepository(session).capability_spec(parse_pool_provider_id(provider_id))
+            if spec is None:
+                return None
+            (ref_provider_id, ref_model_id), overrides = spec
+            raw = overrides.get("duration_constraints") if isinstance(overrides, dict) else None
+            if isinstance(raw, dict):
+                return _constraints_from_payload(raw)
+            return await self.video_duration_constraints(ref_provider_id, ref_model_id)
         if not is_custom_provider(provider_id):
             return builtin_duration_constraints(provider_id, model_id)
         from lib.custom_provider.endpoint_resolution import resolve_endpoint_spec
         from lib.custom_provider.model_facts import video_model_facts
         from lib.db.repositories.custom_endpoint_repo import CustomEndpointRepository
-
         async with self._open_session() as (session, _svc):
             try:
                 model = await CustomProviderRepository(session).get_model_by_ids(
@@ -1040,6 +1078,23 @@ class ConfigResolver:
         :meth:`video_capabilities_for_model` 派生声音一致性同一口径；没有覆盖、模型行或端点解析不出时为 None，
         调用方按「无信号不收紧」处理，引用失效由能力解析报错，这里不重复。
         """
+        if is_source_pool_provider(provider_id):
+            # 池的音轨：池覆盖了音轨形态就用覆盖值，否则取参考成员。
+            from lib.config.source_pool import parse_pool_provider_id
+            from lib.db.repositories.source_pool_repo import SourcePoolRepository
+
+            async with self._open_session() as (session, _svc):
+                spec = await SourcePoolRepository(session).capability_spec(parse_pool_provider_id(provider_id))
+            if spec is None:
+                return None
+            (ref_provider_id, ref_model_id), overrides = spec
+            key = "audio_track" if generation_type == "i2v" else "reference_route_audio_track"
+            raw = overrides.get(key) if isinstance(overrides, dict) else None
+            if isinstance(raw, str):
+                return raw
+            return await self.video_audio_track(
+                ref_provider_id, ref_model_id, generation_type=generation_type, builtin_endpoint=builtin_endpoint
+            )
         if not is_custom_provider(provider_id):
             return builtin_video_audio_track(
                 provider_id, model_id, generation_type=generation_type, builtin_endpoint=builtin_endpoint
@@ -1546,23 +1601,23 @@ class ConfigResolver:
         （``docs/adr/0054``）。
         """
         provider_id, model_id = selected.provider_id, selected.model_id
-        # 汇总源：能力取自能力参考成员（内置或自定义都可能），桶能力闸与报错仍以池身份回答。
-        # 参考成员不是池（写入侧不允许池套池），故可安全地按成员身份再走一遍同一套能力求值。
+        # 汇总源：桶能力闸按「参考成员 ⊕ 池覆盖」求值，报错以池身份给出。直接复用能力解析结果，
+        # 池覆盖改了 first_frame / max_reference_images / text_to_video 时闸也跟着变。
         if is_source_pool_provider(provider_id):
-            from lib.config.source_pool import parse_pool_provider_id
-            from lib.db.repositories.source_pool_repo import SourcePoolRepository
-
-            pool_id = parse_pool_provider_id(provider_id)
-            reference = await SourcePoolRepository(session).capability_member(pool_id)
-            if reference is None:
-                raise _video_bucket_reference_unavailable(generation_type, provider_id, model_id)
             try:
-                await self._ensure_video_bucket_capability(
-                    session, ProviderModel(*reference), generation_type
+                caps_dict = await self._resolve_source_pool_caps(
+                    ConfigService(session), session, provider_id, model_id, None, generation_type=generation_type
                 )
-            except VideoBucketCapabilityError as exc:
-                # 报错换成池身份：用户引用的是池，报成员身份会指错对象。
+            except ValueError as exc:
                 raise _video_bucket_reference_unavailable(generation_type, provider_id, model_id) from exc
+            satisfied = video_capability_satisfied(
+                generation_type=generation_type,
+                first_frame=bool(caps_dict.get("first_frame")),
+                max_reference_images=caps_dict.get("max_reference_images"),
+                text_to_video=bool(caps_dict.get("text_to_video", True)),
+            )
+            if not satisfied:
+                raise _video_bucket_capability_missing(generation_type, provider_id, model_id)
             return
         model = await self._ensure_video_identity_resolvable(session, selected, generation_type)
         if model is not None:
@@ -1695,6 +1750,110 @@ class ConfigResolver:
             svc, session, selected.provider_id, selected.model_id, project, generation_type=generation_type
         )
 
+    async def _resolve_source_pool_caps(
+        self,
+        svc: ConfigService,
+        session: AsyncSession,
+        provider_id: str,
+        model_id: str,
+        project: dict | None,
+        *,
+        generation_type: VideoGenerationType | None,
+    ) -> dict:
+        """汇总源的能力：参考成员解析出的能力 ⊕ 池自己整维覆盖的 ``capability_overrides``。
+
+        参考成员只提供原值；用户在池上覆盖的维度整维替换（语义同自定义供应商模型的能力覆盖）。
+        对外身份仍是池自身（``pool-<id>``），供调用方核对引用未漂移。叠加只动「用户可覆盖」的维度：
+        时长、分辨率、时长联动约束、参考图上限、文本生视频、首/尾帧、参考音频、音轨形态。
+        """
+        from lib.config.source_pool import parse_pool_provider_id
+        from lib.custom_provider.capabilities import (
+            CAPABILITY_OVERRIDE_FIELDS,
+            capability_value_matches,
+            overridden_audio_track,
+        )
+        from lib.custom_provider.model_facts import ALL_MODEL_FACT_OVERRIDE_KEYS, model_fact_value_matches
+        from lib.db.repositories.source_pool_repo import SourcePoolRepository
+
+        pool_id = parse_pool_provider_id(provider_id)
+        spec = await SourcePoolRepository(session).capability_spec(pool_id)
+        if spec is None:
+            raise ValueError(f"source pool {provider_id} has no members to derive capabilities from")
+        (ref_provider_id, ref_model_id), raw_overrides = spec
+        # 参考成员解析出的能力（递归：参考成员是普通身份，不会又是池——写入侧禁池套池）。
+        base = await self._resolve_video_caps_for_model(
+            svc, session, ref_provider_id, ref_model_id, project, generation_type=generation_type
+        )
+        # 只收形状合法的键：通道事实按 VideoCapabilities 字段校验，模型事实（时长/分辨率/联动约束）
+        # 按 model_fact 校验。其余键（派生字段等）忽略。
+        applied: dict[str, object] = {}
+        if isinstance(raw_overrides, dict):
+            for key, value in raw_overrides.items():
+                expected = CAPABILITY_OVERRIDE_FIELDS.get(key)
+                if expected is not None:
+                    if capability_value_matches(value, expected):
+                        applied[key] = value
+                elif key in ALL_MODEL_FACT_OVERRIDE_KEYS and model_fact_value_matches(key, value):
+                    applied[key] = value
+        if not applied:
+            return {**base, "provider_id": provider_id, "model": model_id}
+
+        overrides = dict(base)
+        # 模型事实维度：时长、分辨率、时长联动约束。
+        if "durations" in applied and isinstance(applied["durations"], list):
+            durations = sorted({int(d) for d in applied["durations"]})
+            overrides["supported_durations"] = durations
+            overrides["max_duration"] = max(durations, default=0)
+        if "resolutions" in applied and isinstance(applied["resolutions"], list):
+            overrides["resolutions"] = [str(r) for r in applied["resolutions"]]
+        if "duration_constraints" in applied and isinstance(applied["duration_constraints"], dict):
+            overrides["duration_constraints"] = applied["duration_constraints"]
+        # 通道事实维度：直接覆盖到对应字段。
+        for key in (
+            "text_to_video",
+            "first_frame",
+            "last_frame",
+            "max_reference_images",
+            "max_reference_audio_count",
+            "reference_audio_per_image",
+        ):
+            if key in applied:
+                overrides[key] = applied[key]
+        if "reference_audio_mode" in applied:
+            overrides["reference_audio_mode"] = applied["reference_audio_mode"]
+        if "max_prompt_chars" in applied:
+            overrides["max_prompt_chars"] = applied["max_prompt_chars"]
+        # 音轨形态：覆盖后重算 has_audio 与声音一致性。以覆盖值为准，没有覆盖时沿用参考成员。
+        audio_keys = {"audio_track", "reference_route_audio_track"}
+        if audio_keys & applied.keys():
+            # 用覆盖后的音轨形态重建一个轻量 caps 只供 overridden_audio_track 取该路径分支。
+            # overridden_audio_track 需要 VideoCapabilities；直接从 base 的布尔/枚举重建。
+            from arcreel_market_core.video_backend_contract import VideoAudioMode, VideoCapabilities
+
+            def _mode(key: str, fallback: str) -> VideoAudioMode:
+                raw = applied.get(key)
+                return VideoAudioMode(raw) if raw else VideoAudioMode(fallback)
+
+            base_track = "always_on" if base.get("has_audio", True) else "always_off"
+            ref_caps = VideoCapabilities(
+                audio_track=_mode("audio_track", base_track),
+                reference_route_audio_track=_mode("reference_route_audio_track", base_track),
+            )
+            overridden = overridden_audio_track(ref_caps, applied, generation_type or "i2v")
+            if overridden is not None:
+                overrides["has_audio"] = overridden != "always_off"
+        # 声音一致性按覆盖后的音轨与参考音频重新派生。
+        if overrides.get("has_audio") != base.get("has_audio") or "reference_audio_mode" in applied:
+            overrides["voice_consistency"] = derive_voice_consistency(
+                reference_audio_mode=overrides.get("reference_audio_mode", base.get("reference_audio_mode", "none")),
+                generation_mode=caps_generation_mode(project),
+                has_audio=overrides.get("has_audio", base.get("has_audio", True)),
+                character_voice_binding=character_voice_binding(project),
+            )
+        overrides["provider_id"] = provider_id
+        overrides["model"] = model_id
+        return overrides
+
     async def _resolve_video_caps_for_model(
         self,
         svc: ConfigService,
@@ -1713,20 +1872,14 @@ class ConfigResolver:
             generation_type = video_bucket_for_generation_mode(caps_generation_mode(project))
         effective = await self._resolve_effective_video_provider_model(session, ProviderModel(provider_id, model_id))
         provider_id, model_id = effective.provider_id, effective.model_id
-        # 汇总源是虚拟 provider：它自身没有能力声明，取「能力参考成员」的能力回填（显式配置优先，
-        # 否则 position=0 首个成员）。对外仍以池身份回答，调用方据此核对引用未漂移；能力值来自参考成员。
+        # 汇总源是虚拟 provider：它自身没有能力声明。能力 = 参考成员解析出的能力，再叠加池自己整维覆盖的
+        # capability_overrides（参考成员只提供原值，用户可逐维改）。对外仍以池身份回答，调用方据此核对
+        # 引用未漂移；能力值来自「参考成员 ⊕ 池覆盖」。
         if is_source_pool_provider(provider_id):
-            from lib.config.source_pool import parse_pool_provider_id
-            from lib.db.repositories.source_pool_repo import SourcePoolRepository
-
-            pool_id = parse_pool_provider_id(provider_id)
-            reference = await SourcePoolRepository(session).capability_member(pool_id)
-            if reference is None:
-                raise ValueError(f"source pool {provider_id} has no members to derive capabilities from")
-            identity_provider_id, identity_model_id = provider_id, model_id
-            provider_id, model_id = reference
-        else:
-            identity_provider_id, identity_model_id = provider_id, model_id
+            return await self._resolve_source_pool_caps(
+                svc, session, provider_id, model_id, project, generation_type=generation_type
+            )
+        identity_provider_id, identity_model_id = provider_id, model_id
         if is_custom_provider(provider_id):
             # 延迟导入：分层契约（pyproject.toml [tool.importlinter]）以 lib.config 为下层，
             # 而该符号所在的装配层反过来依赖 lib.config，模块级导入会成环；注册表分支不用它，
@@ -1791,12 +1944,16 @@ class ConfigResolver:
                 override = comfyui_duration_override(model.capability_overrides, model_id=model_id)
                 endpoint_durations = list(endpoint_spec.endpoint_durations)
                 supported_durations = override if override and endpoint_durations else endpoint_durations
+                model_facts = video_model_facts(model_id, model.capability_overrides, entry_binding=model.entry_binding)
+                resolutions = list(model_facts.resolutions) if model_facts.resolutions is not None else None
+                duration_constraints_obj = None
             else:
                 # 其余端点：能力覆盖 > 对应条目 > 按名字推断的预设（对应不上条目时），回落结果只在这里现算，
                 # 不写回任何字段（docs/adr/0105）。
-                supported_durations = list(
-                    video_model_facts(model_id, model.capability_overrides, entry_binding=model.entry_binding).durations
-                )
+                model_facts = video_model_facts(model_id, model.capability_overrides, entry_binding=model.entry_binding)
+                supported_durations = list(model_facts.durations)
+                resolutions = list(model_facts.resolutions) if model_facts.resolutions is not None else None
+                duration_constraints_obj = model_facts.duration_constraints
         else:
             source = "registry"
             durations_optional = False
@@ -1806,6 +1963,8 @@ class ConfigResolver:
             if model_info is None:
                 raise ValueError(f"model not found in registry: {provider_id}/{model_id}")
             supported_durations = list(model_info.supported_durations or [])
+            resolutions = list(model_info.resolutions) if model_info.resolutions else None
+            duration_constraints_obj = builtin_duration_constraints(provider_id, model_id)
             # 视频能力位与参考图上限取调用通道声明与模型条目两侧求值的生效值，与执行闸门、能力闸
             # （`_ensure_video_bucket_capability`）与桶候选下拉（`lib.backends.generation_type_buckets`）同一求值规则；
             # 给出 `builtin_endpoint` 时按构造后端的端点求值，其余读点读模型当前挂接的端点。
@@ -1888,6 +2047,15 @@ class ConfigResolver:
             "model": identity_model_id,
             "supported_durations": supported_durations,
             "max_duration": max_duration,
+            "resolutions": resolutions,
+            "duration_constraints": (
+                {
+                    "by_resolution": {res: list(v) for res, v in duration_constraints_obj.by_resolution.items()},
+                    "with_reference_images": list(duration_constraints_obj.with_reference_images),
+                }
+                if duration_constraints_obj is not None
+                else None
+            ),
             "max_reference_images": max_reference_images,
             "text_to_video": text_to_video,
             "first_frame": first_frame,
@@ -1896,6 +2064,8 @@ class ConfigResolver:
             "requested_generate_audio": requested_generate_audio,
             "max_reference_audio_count": max_reference_audio_count,
             "reference_audio_per_image": reference_audio_per_image,
+            "reference_audio_mode": reference_audio_mode,
+            "has_audio": has_audio,
             "source": source,
             # 档位是空集且该端点允许空集 = 这一维由端点固定（GLOSSARY.md「维度由端点固定」）。
             # 消费方据此区分「这一维在该端点上不存在」与「档位声明缺失」——后者已在上面 fail loud。
