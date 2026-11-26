@@ -1039,7 +1039,7 @@ class ConfigResolver:
             if spec is None:
                 return None
             (ref_provider_id, ref_model_id), overrides = spec
-            raw = overrides.get("duration_constraints") if isinstance(overrides, dict) else None
+            raw = overrides.get("duration_constraints")
             if isinstance(raw, dict):
                 return _constraints_from_payload(raw)
             return await self.video_duration_constraints(ref_provider_id, ref_model_id)
@@ -1090,7 +1090,7 @@ class ConfigResolver:
                 return None
             (ref_provider_id, ref_model_id), overrides = spec
             key = "audio_track" if generation_type == "i2v" else "reference_route_audio_track"
-            raw = overrides.get(key) if isinstance(overrides, dict) else None
+            raw = overrides.get(key)
             if isinstance(raw, str):
                 return raw
             return await self.video_audio_track(
@@ -1788,14 +1788,13 @@ class ConfigResolver:
         # 只收形状合法的键：通道事实按 VideoCapabilities 字段校验，模型事实（时长/分辨率/联动约束）
         # 按 model_fact 校验。其余键（派生字段等）忽略。
         applied: dict[str, object] = {}
-        if isinstance(raw_overrides, dict):
-            for key, value in raw_overrides.items():
-                expected = CAPABILITY_OVERRIDE_FIELDS.get(key)
-                if expected is not None:
-                    if capability_value_matches(value, expected):
-                        applied[key] = value
-                elif key in ALL_MODEL_FACT_OVERRIDE_KEYS and model_fact_value_matches(key, value):
+        for key, value in raw_overrides.items():
+            expected = CAPABILITY_OVERRIDE_FIELDS.get(key)
+            if expected is not None:
+                if capability_value_matches(value, expected):
                     applied[key] = value
+            elif key in ALL_MODEL_FACT_OVERRIDE_KEYS and model_fact_value_matches(key, value):
+                applied[key] = value
         if not applied:
             return {**base, "provider_id": provider_id, "model": model_id}
 

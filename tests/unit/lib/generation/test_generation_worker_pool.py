@@ -114,7 +114,7 @@ async def test_pool_task_requeued_when_all_members_full() -> None:
         requeued.append(task_id)
         return True
 
-    worker._requeue_single_task = _record_requeue  # type: ignore[method-assign]
+    worker._requeue_single_task = _record_requeue
     # 占满唯一成员
     worker._slots.register("custom-2", "video", "other", asyncio.get_running_loop().create_future())
 
@@ -145,7 +145,7 @@ async def test_pool_task_requeued_when_all_members_unavailable() -> None:
         requeued.append(task_id)
         return True
 
-    worker._requeue_single_task = _record_requeue  # type: ignore[method-assign]
+    worker._requeue_single_task = _record_requeue
 
     await worker._claim_tasks()
 
@@ -165,7 +165,7 @@ async def test_pool_task_never_marked_failed_when_no_member() -> None:
         requeued.append(task_id)
         return True
 
-    worker._requeue_single_task = _record_requeue  # type: ignore[method-assign]
+    worker._requeue_single_task = _record_requeue
 
     await worker._claim_tasks()
 

@@ -233,7 +233,7 @@ async def get_source_pool_capabilities(
     ) or "controllable"
 
     editable = _order(overridable_keys("video"))
-    overrides = dict(raw_overrides) if isinstance(raw_overrides, dict) else {}
+    overrides = dict(raw_overrides)
     return PoolCapabilityView(
         media_type="video",
         editable=editable,
