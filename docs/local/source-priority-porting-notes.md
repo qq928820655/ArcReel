@@ -119,7 +119,9 @@ def _source_priority_generation_type(generation_type: VideoGenerationType | None
 **(b) `resolve_video_backend` 加参数**（锚点：该函数签名）
 
 ```python
+# fmt: off
 project_name: str | None = None,
+# fmt: on
 ```
 
 并透传给 `_resolve_video_provider_model(..., project_name=project_name)`。
@@ -177,15 +179,19 @@ if source_priority is not None:
 1. `from server.routers import (...)` 里加 `source_priority,`
 2. `lifespan` 启动段（锚点：`start_trash_expiry` 附近）：
    ```python
+   # fmt: off
    from lib.config.source_priority_reset import start_source_priority_reset, stop_source_priority_reset
    source_priority_reset = start_source_priority_reset(async_session_factory)
+   # fmt: on
    ```
 3. `lifespan` finally 段：`await stop_source_priority_reset(source_priority_reset)`
 4. `create_generation_worker()`：注入 `outcome_listener=SourcePriorityService(async_session_factory)`
 5. 路由注册（锚点：`system_config.router` 之后）：
    ```python
+   # fmt: off
    app.include_router(source_priority.router, prefix="/api/v1",
                       dependencies=[Depends(get_current_user)], tags=["多源优先级"])
+   # fmt: on
    ```
 
 ### 7. `server/services/project/model_references.py`
