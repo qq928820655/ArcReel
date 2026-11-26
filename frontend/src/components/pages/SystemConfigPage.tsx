@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { useSearch } from "wouter";
 import {
+  Activity,
   AlertTriangle,
   BarChart3,
   Boxes,
@@ -43,6 +44,7 @@ import { MarketSection } from "./settings/market/MarketSection";
 import { MediaModelSection } from "./settings/MediaModelSection";
 import { SourcePrioritySection } from "@/components/shared/SourcePrioritySection";
 import { SourcePoolSection } from "./settings/SourcePoolSection";
+import { SourcePoolMonitorSection } from "./settings/SourcePoolMonitorSection";
 import { PromptTemplatesSection } from "./settings/PromptTemplatesSection";
 
 interface SectionDef {
@@ -56,6 +58,7 @@ const SECTIONS: Record<SettingsSection, SectionDef> = {
   "default-models": { labelKey: "dashboard:settings_default_models", icon: Film, tier: "constrained" },
   "source-priority": { labelKey: "dashboard:settings_source_priority", icon: ListOrdered, tier: "constrained" },
   "source-pools": { labelKey: "dashboard:settings_source_pools", icon: Boxes, tier: "constrained" },
+  "source-pool-monitor": { labelKey: "dashboard:settings_source_pool_monitor", icon: Activity, tier: "full" },
   endpoints: { labelKey: "dashboard:ce_section_title", icon: Waypoints, tier: "bleed" },
   "asset-library": { labelKey: "dashboard:settings_asset_library", icon: HardDrive, tier: "constrained" },
   "arcreel-agent": { labelKey: "dashboard:settings_arcreel_agent", icon: Bot, tier: "constrained" },
@@ -71,7 +74,7 @@ const SECTIONS: Record<SettingsSection, SectionDef> = {
 
 /** 侧栏分组与顺序。市场与使用记录各自单独成项，不设分组标题。 */
 const SECTION_GROUPS: { id: string; labelKey?: string; sections: SettingsSection[] }[] = [
-  { id: "generation", labelKey: "dashboard:settings_group_generation", sections: ["providers", "default-models", "source-priority", "source-pools", "endpoints", "asset-library"] },
+  { id: "generation", labelKey: "dashboard:settings_group_generation", sections: ["providers", "default-models", "source-priority", "source-pools", "source-pool-monitor", "endpoints", "asset-library"] },
   {
     id: "agent",
     labelKey: "dashboard:settings_group_agent",
@@ -162,6 +165,8 @@ function SectionContent({ section }: { section: SettingsSection }) {
       return <SourcePrioritySection scope="global" />;
     case "source-pools":
       return <SourcePoolSection />;
+    case "source-pool-monitor":
+      return <SourcePoolMonitorSection />;
     case "endpoints":
       return <EndpointsSection />;
     case "asset-library":

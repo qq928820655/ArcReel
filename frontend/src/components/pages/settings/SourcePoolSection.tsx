@@ -27,22 +27,40 @@ interface PoolDraft {
   key: string;
   id: number | null;
   name: string;
+  /** 统一模型名：候选下拉与默认模型页展示用；空则回退 name。 */
+  modelName: string;
+  /** 能力参考成员：`provider/model`，空则取首个成员。 */
+  capabilityPair: string;
   enabled: boolean;
   rows: MemberRow[];
 }
 
 function draftFromPool(pool: VideoSourcePool): PoolDraft {
+  const capabilityPair =
+    pool.capability_provider_id && pool.capability_model_id
+      ? `${pool.capability_provider_id}/${pool.capability_model_id}`
+      : "";
   return {
     key: `pool-${pool.id}`,
     id: pool.id,
     name: pool.name,
+    modelName: pool.model_name ?? "",
+    capabilityPair,
     enabled: pool.enabled,
     rows: pool.members.map((m) => ({ pair: `${m.provider_id}/${m.model_id}` })),
   };
 }
 
 function newPoolDraft(): PoolDraft {
-  return { key: `new-${Date.now()}`, id: null, name: "", enabled: true, rows: [{ pair: "" }] };
+  return {
+    key: `new-${Date.now()}`,
+    id: null,
+    name: "",
+    modelName: "",
+    capabilityPair: "",
+    enabled: true,
+    rows: [{ pair: "" }],
+  };
 }
 
 /** 汇总源成员只能选真实视频模型，不能把另一个汇总源当成员（避免池套池）。 */
@@ -124,7 +142,15 @@ export function SourcePoolSection() {
     setBusyKey(draft.key);
     setActionError(null);
     try {
-      const input = { name: draft.name.trim(), enabled: draft.enabled, members };
+      const capability = splitPair(draft.capabilityPair);
+      const input = {
+        name: draft.name.trim(),
+        model_name: draft.modelName.trim() || null,
+        capability_provider_id: capability?.provider_id ?? null,
+        capability_model_id: capability?.model_id ?? null,
+        enabled: draft.enabled,
+        members,
+      };
       const saved =
         draft.id === null ? await API.createSourcePool(input) : await API.updateSourcePool(draft.id, input);
       setPools((prev) =>
@@ -218,6 +244,32 @@ export function SourcePoolSection() {
                 />
                 <span>{t("source_pool_enabled")}</span>
               </label>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor={`pool-model-name-${draft.key}`}>{t("source_pool_model_name_label")}</Label>
+              <Input
+                id={`pool-model-name-${draft.key}`}
+                value={draft.modelName}
+                onChange={(e) => mutate(draft.key, (d) => ({ ...d, modelName: e.target.value }))}
+                placeholder={draft.name || t("source_pool_model_name_placeholder")}
+                maxLength={128}
+              />
+              <p className="text-xs text-muted-foreground">{t("source_pool_model_name_hint")}</p>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <div className="text-xs font-medium text-muted-foreground">{t("source_pool_capability_label")}</div>
+              <ProviderModelSelect
+                value={draft.capabilityPair}
+                options={draft.rows.map((r) => r.pair).filter((pair) => splitPair(pair) !== null)}
+                providerNames={providerNames}
+                modelNames={modelNames}
+                onChange={(value) => mutate(draft.key, (d) => ({ ...d, capabilityPair: value }))}
+                placeholder={t("source_pool_capability_placeholder")}
+                aria-label={t("source_pool_capability_label")}
+              />
+              <p className="text-xs text-muted-foreground">{t("source_pool_capability_hint")}</p>
             </div>
 
             <div className="flex flex-col gap-2">

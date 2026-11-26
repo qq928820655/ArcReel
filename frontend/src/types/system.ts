@@ -243,6 +243,11 @@ export interface VideoSourcePool {
   /** 虚拟 provider id，形如 `pool-1`；可直接用于默认模型与多源优先级的 `provider_id`。 */
   provider_id: string;
   name: string;
+  /** 统一模型名：候选下拉与默认模型页展示用；空则回退 name。虚拟 model_id 固定 aggregate。 */
+  model_name: string | null;
+  /** 能力参考成员：池的能力取此成员回填；空则取 position=0 的首个成员。 */
+  capability_provider_id: string | null;
+  capability_model_id: string | null;
   enabled: boolean;
   members: VideoSourcePoolMember[];
 }
@@ -250,6 +255,38 @@ export interface VideoSourcePool {
 /** 新建/更新汇总源的请求体。成员顺序即分配时的 position 顺序。 */
 export interface VideoSourcePoolInput {
   name: string;
+  model_name: string | null;
+  capability_provider_id: string | null;
+  capability_model_id: string | null;
   enabled: boolean;
   members: { provider_id: string; model_id: string }[];
+}
+
+/** 汇总源监控里的一条任务：池 → 真实成员 → 调用聚合。 */
+export interface SourcePoolTask {
+  task_id: string;
+  project_name: string;
+  task_type: string;
+  resource_id: string;
+  source_pool_id: number;
+  pool_name: string | null;
+  /** 实际执行的供应商（池展开后的真实成员）。 */
+  provider_id: string | null;
+  model_id: string | null;
+  status: string;
+  error_message: string | null;
+  queued_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  call_count: number;
+  success_count: number;
+  failed_count: number;
+  last_call_finished_at: string | null;
+}
+
+export interface SourcePoolTaskPage {
+  items: SourcePoolTask[];
+  total: number;
+  page: number;
+  page_size: number;
 }

@@ -54,6 +54,7 @@ import type {
   SourcePriorityMediaType,
   VideoSourcePool,
   VideoSourcePoolInput,
+  SourcePoolTaskPage,
   ApiKeyInfo,
   AssetLibraryAccount,
   AssetLibraryAccountList,
@@ -663,6 +664,21 @@ class API {
   /** 删除汇总源。 */
   static async deleteSourcePool(id: number): Promise<{ deleted: boolean }> {
     return this.request(`/system/source-pools/${id}`, { method: "DELETE" });
+  }
+
+  /** 汇总源监控：经池分配的任务 + 真实成员 + 调用聚合，分页。 */
+  static async listSourcePoolTasks(
+    params: { poolId?: number; status?: string; projectName?: string; page?: number; pageSize?: number } = {},
+    options: { signal?: AbortSignal } = {},
+  ): Promise<SourcePoolTaskPage> {
+    const query = new URLSearchParams();
+    if (params.poolId !== undefined) query.set("pool_id", String(params.poolId));
+    if (params.status) query.set("status", params.status);
+    if (params.projectName) query.set("project_name", params.projectName);
+    if (params.page !== undefined) query.set("page", String(params.page));
+    if (params.pageSize !== undefined) query.set("page_size", String(params.pageSize));
+    const qs = query.toString();
+    return this.request(`/system/source-pools/monitor${qs ? `?${qs}` : ""}`, { signal: options.signal });
   }
 
   // ==================== 项目管理 ====================

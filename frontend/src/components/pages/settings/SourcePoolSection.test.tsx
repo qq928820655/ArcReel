@@ -24,6 +24,9 @@ const EXISTING_POOL = {
   id: 1,
   provider_id: "pool-1",
   name: "双源池",
+  model_name: null,
+  capability_provider_id: null,
+  capability_model_id: null,
   enabled: true,
   members: [{ position: 0, provider_id: "custom-2", model_id: "seedance-2.0" }],
 };
