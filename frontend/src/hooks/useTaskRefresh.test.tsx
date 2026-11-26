@@ -73,7 +73,7 @@ describe("useTaskRefresh", () => {
 
     // Advance to next poll interval (3s)
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(3000);
+      await vi.advanceTimersByTimeAsync(5000);
     });
     expect(listSpy).toHaveBeenCalledTimes(2);
 
@@ -98,7 +98,7 @@ describe("useTaskRefresh", () => {
     vi.spyOn(API, "getTaskStats").mockResolvedValueOnce({ stats: { queued: 0, running: 0, succeeded: 0, failed: 0, total: 0 } } as any);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(3000);
+      await vi.advanceTimersByTimeAsync(5000);
     });
 
     expect(useTasksStore.getState().connected).toBe(true);
@@ -201,26 +201,26 @@ describe("useTaskRefresh", () => {
       return listSpy;
     }
 
-    it("无任务在途时退到 30 秒空闲对账，不再每 3 秒轮询", async () => {
+    it("无任务在途时退到 60 秒空闲对账，不再每 5 秒轮询", async () => {
       const listSpy = mockOk();
 
       renderHook(() => useTaskRefresh("demo"));
       await act(async () => {});
       expect(listSpy).toHaveBeenCalledTimes(1);
 
-      // 没有任务在途，状态本就不会变：3 秒间隔不再触发轮询。
+      // 没有任务在途，状态本就不会变：5 秒间隔不再触发轮询。
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(3000);
+        await vi.advanceTimersByTimeAsync(5000);
       });
       expect(listSpy).toHaveBeenCalledTimes(1);
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(27000);
+        await vi.advanceTimersByTimeAsync(55000);
       });
       expect(listSpy).toHaveBeenCalledTimes(2);
     });
 
-    it("有任务在途时保持 3 秒轮询，queued→running 一类中间态不被空闲退避拖慢", async () => {
+    it("有任务在途时保持 5 秒轮询，queued→running 一类中间态不被空闲退避拖慢", async () => {
       // 回归：中间态没有终态事件推送，只能靠轮询看见；若此时退到空闲档，任务
       // 「开始执行」会比只有轮询的旧实现更晚出现。
       const listSpy = mockOk({ queued: 1, total: 1 });
@@ -231,7 +231,7 @@ describe("useTaskRefresh", () => {
       const busyBaseline = listSpy.mock.calls.length;
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(3000);
+        await vi.advanceTimersByTimeAsync(5000);
       });
       expect(listSpy.mock.calls.length).toBeGreaterThan(busyBaseline);
     });
@@ -248,11 +248,11 @@ describe("useTaskRefresh", () => {
       await act(async () => {
         useTasksStore.getState().beginOptimisticActive("demo", "storyboard", "segment-1", "storyboard");
       });
-      // 不等 30 秒空闲间隔，当场取一次状态。
+      // 不等 60 秒空闲间隔，当场取一次状态。
       expect(listSpy).toHaveBeenCalledTimes(2);
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(3000);
+        await vi.advanceTimersByTimeAsync(5000);
       });
       expect(listSpy).toHaveBeenCalledTimes(3);
     });

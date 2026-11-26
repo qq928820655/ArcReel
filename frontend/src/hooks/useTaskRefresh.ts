@@ -7,9 +7,9 @@ import {
 import { voidCall } from "@/utils/async";
 
 /** 有任务在途（或上轮拉取失败）时的轮询间隔——此间隔决定 queued→running 等中间态的可见延迟。 */
-const FAST_POLL_INTERVAL_MS = 3000;
+const FAST_POLL_INTERVAL_MS = 5000;
 /** 无任务在途时的空闲退避间隔——没有状态会变，轮询只为捕捉外部（别的客户端/skill）新入队的任务。 */
-const IDLE_POLL_INTERVAL_MS = 30000;
+const IDLE_POLL_INTERVAL_MS = 60000;
 
 /**
  * 任务队列状态的刷新 Hook。
