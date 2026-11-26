@@ -55,6 +55,7 @@ import type {
   VideoSourcePool,
   VideoSourcePoolInput,
   SourcePoolTaskPage,
+  SourcePoolCapabilities,
   ApiKeyInfo,
   AssetLibraryAccount,
   AssetLibraryAccountList,
@@ -664,6 +665,14 @@ class API {
   /** 删除汇总源。 */
   static async deleteSourcePool(id: number): Promise<{ deleted: boolean }> {
     return this.request(`/system/source-pools/${id}`, { method: "DELETE" });
+  }
+
+  /** 汇总源自己的能力视图：参考成员原值 + 池覆盖 + 生效值。 */
+  static async getSourcePoolCapabilities(
+    id: number,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<SourcePoolCapabilities> {
+    return this.request(`/system/source-pools/${id}/capabilities`, { signal: options.signal });
   }
 
   /** 汇总源监控：经池分配的任务 + 真实成员 + 调用聚合，分页。 */

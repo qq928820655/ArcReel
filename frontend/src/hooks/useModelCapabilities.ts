@@ -68,6 +68,8 @@ export interface ModelCapabilities {
   lastFrame: boolean | null;
   /** 声音一致性三级标识；尚未查到或查询失败时为 null（未知）。 */
   voiceConsistency: VoiceConsistencyTier | null;
+  /** 该模型声明的分辨率全集；尚未查到或查询失败时为 null（未知）。 */
+  resolutions: string[] | null;
   /**
    * 服务端明确答复视频模型不满足桶能力或无法解析（端点 400/422）。网络等其他失败不算，仍为 false：
    * 那只是能力未知，不能据此门控。
@@ -196,6 +198,7 @@ export function useModelCapabilities({
     firstFrame: caps ? caps.first_frame : null,
     lastFrame: caps ? caps.last_frame : null,
     voiceConsistency: caps ? caps.voice_consistency : null,
+    resolutions: caps?.resolutions ?? null,
     videoModelUnresolved: fresh && result.unresolved,
     videoModelError: fresh ? result.error : null,
     loading: key !== null && !fresh,

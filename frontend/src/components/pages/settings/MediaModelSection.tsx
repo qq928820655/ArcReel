@@ -40,12 +40,10 @@ import { useEndpointCatalogStore } from "@/stores/endpoint-catalog-store";
 import { useDisplayNames } from "@/hooks/useDisplayNames";
 import { useModelCandidates } from "@/hooks/useModelCandidates";
 import { useTtsModelCapabilities } from "@/hooks/useTtsModelCapabilities";
+import { useModelCapabilities } from "@/hooks/useModelCapabilities";
 import {
-  catalogDurations,
   getCustomProviderModels,
   getProviderModels,
-  lookupCatalogVideoAudio,
-  lookupResolutions,
   lookupVideoAudioControl,
 } from "@/utils/provider-models";
 import type { ProviderInfo, VideoRoute } from "@/types/provider";
@@ -234,6 +232,12 @@ export function MediaModelSection() {
   // 默认音频模型留空（自动选择）时不列音色：实际模型由运行时推断，列出某一家的音色会误导
   const audioVoices = useTtsModelCapabilities(fields.default_audio_backend ?? "")?.voices ?? [];
 
+  // 默认模型留空时按后端预览的自动选中模型取能力，与下拉显示的 defaultAuto 同取图生视频。
+  // 规格条统一经 useModelCapabilities 读服务端能力（无项目走 /providers/video-capabilities），
+  // 池与自定义供应商同样适用，不再查前端目录。
+  const videoSpecBackend = (fields.default_video_backend ?? "") || auto?.i2v || "";
+  const videoSpecCapabilities = useModelCapabilities({ videoBackend: videoSpecBackend || null });
+
   if (!settings || !options) {
     return (
       <div className="flex items-center gap-2 py-12 text-sm text-muted-foreground">
@@ -317,12 +321,9 @@ export function MediaModelSection() {
   );
 
   // 默认模型留空时按后端预览的自动选中模型取能力，与下拉显示的 defaultAuto 同取图生视频。
-  const videoSpecBackend = currentVideo || auto?.i2v || "";
-  // 全局设置页无项目上下文，档位读目录端点的服务端派生值（generation_mode 未知，native 恒降格），
-  // 不打 /video-capabilities——该端点按项目解析。
-  const videoSpecTier = videoSpecBackend
-    ? (lookupCatalogVideoAudio(providers, videoSpecBackend)?.voiceConsistency ?? null)
-    : null;
+  // 全局设置页无项目上下文，规格条的时长/分辨率/声音一致性统一取服务端能力端点
+  // （/providers/video-capabilities），池与自定义供应商同样适用，不再查前端目录。
+  const videoSpecTier = videoSpecCapabilities.voiceConsistency;
   // 音频勾选框按两个生效桶（细分桶留空即回退基础默认）的开关可控性判定：两桶同为恒有声或
   // 同为恒无声时，无论选择哪种生成模式都收不到音轨开关，置灰并展示成片的实际音轨状态。只要还有一个
   // 桶可控就不置灰——否则闲置的基础默认会连带禁掉可控桶的合法关闭。
@@ -343,12 +344,8 @@ export function MediaModelSection() {
   const audioLocked = audioLockedControl !== null;
   const audioConflict =
     !currentAudio && (i2vAudioControl === "always_on" || r2vAudioControl === "always_on");
-  const videoSpecDurations = videoSpecBackend
-    ? catalogDurations(providers, customProviders, videoSpecBackend)
-    : null;
-  const videoSpecResolutions = videoSpecBackend
-    ? lookupResolutions(providers, videoSpecBackend, customProviders, endpointToMediaType).options
-    : [];
+  const videoSpecDurations = videoSpecCapabilities.rawDurations;
+  const videoSpecResolutions = videoSpecCapabilities.resolutions ?? [];
 
   // 不传 defaultRoute：全局默认模型两条路径都会用到，取任一条都会误报另一条；无项目上下文
   // 时按目录 i2v 位展示。两个细分项下拉各按自己的桶取值，与上方 i2vAudioControl / r2vAudioControl

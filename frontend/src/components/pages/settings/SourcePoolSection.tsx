@@ -1,21 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowDown, ArrowUp, Loader2, Plus, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronRight, Loader2, Plus, Trash2 } from "lucide-react";
 
 import { API } from "@/api";
 import { useAppStore } from "@/stores/app-store";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { ProviderModelSelect } from "@/components/shared/ProviderModelSelect";
 import { useDisplayNames } from "@/hooks/useDisplayNames";
 import { useModelCandidates } from "@/hooks/useModelCandidates";
-import type { CustomProviderInfo } from "@/types/custom-provider";
+import type { CapabilityOverrides, CustomProviderInfo } from "@/types/custom-provider";
 import type { ProviderInfo } from "@/types/provider";
-import type { ModelCandidatesResponse, VideoSourcePool } from "@/types/system";
+import type { ModelCandidatesResponse, SourcePoolCapabilities, VideoSourcePool } from "@/types/system";
 import { errMsg } from "@/utils/async";
 import { getCustomProviderModels, getProviderModels } from "@/utils/provider-models";
+import { ProviderCapabilityOverrides } from "./ProviderCapabilityOverrides";
 
 /** 编辑态里的一行成员：`pair` 是 `provider/model`，空串表示尚未选择。 */
 interface MemberRow {
@@ -31,6 +33,10 @@ interface PoolDraft {
   modelName: string;
   /** 能力参考成员：`provider/model`，空则取首个成员。 */
   capabilityPair: string;
+  /** 池自己的能力覆盖（稀疏）：参考成员只提供原值，用户可在其上整维覆盖。 */
+  overrides: CapabilityOverrides;
+  /** 已保存池的能力视图；新建未保存时为 null，保存后回填。 */
+  capabilities: SourcePoolCapabilities | null;
   enabled: boolean;
   rows: MemberRow[];
 }
@@ -46,6 +52,8 @@ function draftFromPool(pool: VideoSourcePool): PoolDraft {
     name: pool.name,
     modelName: pool.model_name ?? "",
     capabilityPair,
+    overrides: pool.capability_overrides ?? {},
+    capabilities: null,
     enabled: pool.enabled,
     rows: pool.members.map((m) => ({ pair: `${m.provider_id}/${m.model_id}` })),
   };
@@ -58,6 +66,8 @@ function newPoolDraft(): PoolDraft {
     name: "",
     modelName: "",
     capabilityPair: "",
+    overrides: {},
+    capabilities: null,
     enabled: true,
     rows: [{ pair: "" }],
   };
@@ -87,6 +97,7 @@ export function SourcePoolSection() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [invalidKeys, setInvalidKeys] = useState<ReadonlySet<string>>(new Set());
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [customProviders, setCustomProviders] = useState<CustomProviderInfo[]>([]);
   const { candidates, reload: reloadCandidates } = useModelCandidates();
@@ -96,7 +107,21 @@ export function SourcePoolSection() {
     setLoadError(null);
     try {
       const res = await API.listSourcePools();
-      setPools(res.map(draftFromPool));
+      const drafts = res.map(draftFromPool);
+      // 已保存的池逐个取能力视图，编辑器据此渲染原值与生效值；取失败不阻塞列表。
+      const caps = await Promise.all(
+        drafts.map((d) =>
+          d.id === null
+            ? Promise.resolve(null)
+            : API.getSourcePoolCapabilities(d.id).catch(() => null),
+        ),
+      );
+      setPools(
+        drafts.map((d, i) => {
+          const view = caps[i];
+          return { ...d, capabilities: view, overrides: view?.overrides ?? d.overrides };
+        }),
+      );
     } catch (error) {
       setLoadError(errMsg(error));
     }
@@ -123,6 +148,19 @@ export function SourcePoolSection() {
 
   const options = memberOptions(candidates);
 
+  const setValidity = useCallback((poolKey: string, key: string, valid: boolean) => {
+    const composite = `${poolKey}::${key}`;
+    setInvalidKeys((prev) => {
+      if (prev.has(composite) === !valid) return prev;
+      const next = new Set(prev);
+      if (valid) next.delete(composite);
+      else next.add(composite);
+      return next;
+    });
+  }, []);
+  const isPoolInvalid = (poolKey: string) =>
+    [...invalidKeys].some((composite) => composite.startsWith(`${poolKey}::`));
+
   const mutate = (key: string, fn: (draft: PoolDraft) => PoolDraft) => {
     setPools((prev) => (prev ? prev.map((p) => (p.key === key ? fn(p) : p)) : prev));
   };
@@ -139,23 +177,30 @@ export function SourcePoolSection() {
       setActionError(t("source_pool_members_required"));
       return;
     }
+    if (isPoolInvalid(draft.key)) {
+      setActionError(t("source_pool_capability_invalid"));
+      return;
+    }
     setBusyKey(draft.key);
     setActionError(null);
     try {
       const capability = splitPair(draft.capabilityPair);
+      const overrides = Object.keys(draft.overrides).length > 0 ? draft.overrides : null;
       const input = {
         name: draft.name.trim(),
         model_name: draft.modelName.trim() || null,
         capability_provider_id: capability?.provider_id ?? null,
         capability_model_id: capability?.model_id ?? null,
+        capability_overrides: overrides,
         enabled: draft.enabled,
         members,
       };
       const saved =
         draft.id === null ? await API.createSourcePool(input) : await API.updateSourcePool(draft.id, input);
+      const nextCaps = await API.getSourcePoolCapabilities(saved.id).catch(() => null);
       setPools((prev) =>
         prev
-          ? prev.map((p) => (p.key === draft.key ? draftFromPool(saved) : p))
+          ? prev.map((p) => (p.key === draft.key ? { ...draftFromPool(saved), capabilities: nextCaps } : p))
           : prev,
       );
       // 池会作为视频候选出现，保存后重取候选让默认模型/多源优先级下拉立即看到。
@@ -258,20 +303,6 @@ export function SourcePoolSection() {
               <p className="text-xs text-muted-foreground">{t("source_pool_model_name_hint")}</p>
             </div>
 
-            <div className="flex flex-col gap-1.5">
-              <div className="text-xs font-medium text-muted-foreground">{t("source_pool_capability_label")}</div>
-              <ProviderModelSelect
-                value={draft.capabilityPair}
-                options={draft.rows.map((r) => r.pair).filter((pair) => splitPair(pair) !== null)}
-                providerNames={providerNames}
-                modelNames={modelNames}
-                onChange={(value) => mutate(draft.key, (d) => ({ ...d, capabilityPair: value }))}
-                placeholder={t("source_pool_capability_placeholder")}
-                aria-label={t("source_pool_capability_label")}
-              />
-              <p className="text-xs text-muted-foreground">{t("source_pool_capability_hint")}</p>
-            </div>
-
             <div className="flex flex-col gap-2">
               <div className="text-xs font-medium text-muted-foreground">{t("source_pool_members_label")}</div>
               {draft.rows.map((row, index) => (
@@ -355,6 +386,48 @@ export function SourcePoolSection() {
                 </Button>
               </div>
             </div>
+
+            <div className="flex flex-col gap-1.5">
+              <div className="text-xs font-medium text-muted-foreground">{t("source_pool_capability_label")}</div>
+              <ProviderModelSelect
+                value={draft.capabilityPair}
+                options={draft.rows.map((r) => r.pair).filter((pair) => splitPair(pair) !== null)}
+                providerNames={providerNames}
+                modelNames={modelNames}
+                onChange={(value) => mutate(draft.key, (d) => ({ ...d, capabilityPair: value }))}
+                placeholder={t("source_pool_capability_placeholder")}
+                aria-label={t("source_pool_capability_label")}
+              />
+              <p className="text-xs text-muted-foreground">{t("source_pool_capability_hint")}</p>
+            </div>
+
+            {draft.capabilities && draft.capabilities.editable.length > 0 ? (
+              <Collapsible>
+                <CollapsibleTrigger render={<Button variant="ghost" size="xs" className="-ml-2" />}>
+                  <ChevronRight
+                    aria-hidden
+                    className="transition-transform group-aria-expanded/button:rotate-90"
+                  />
+                  {t("source_pool_capability_overrides_label")}
+                  {Object.keys(draft.overrides).length > 0 ? (
+                    <span className="text-xs text-muted-foreground">
+                      {t("source_pool_capability_overrides_count", { n: Object.keys(draft.overrides).length })}
+                    </span>
+                  ) : null}
+                </CollapsibleTrigger>
+                <CollapsibleContent className="mt-2">
+                  <p className="mb-2 text-xs text-muted-foreground">{t("source_pool_capability_overrides_hint")}</p>
+                  <ProviderCapabilityOverrides
+                    capabilities={draft.capabilities}
+                    value={draft.overrides}
+                    onChange={(next) => mutate(draft.key, (d) => ({ ...d, overrides: next }))}
+                    onValidityChange={(key, valid) => setValidity(draft.key, key, valid)}
+                  />
+                </CollapsibleContent>
+              </Collapsible>
+            ) : draft.id === null ? (
+              <p className="text-xs text-muted-foreground">{t("source_pool_capability_save_first")}</p>
+            ) : null}
 
             <div className="flex items-center justify-end gap-2">
               <Button variant="ghost" disabled={busy} onClick={() => void deletePool(draft)}>

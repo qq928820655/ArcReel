@@ -1,3 +1,6 @@
+import type { CapabilityOverrides } from "./custom-provider";
+import type { ProviderModelCapabilities } from "./provider";
+
 export interface SystemConfigSettings {
   default_video_backend: string;
   default_video_backend_i2v?: string;
@@ -248,6 +251,8 @@ export interface VideoSourcePool {
   /** 能力参考成员：池的能力取此成员回填；空则取 position=0 的首个成员。 */
   capability_provider_id: string | null;
   capability_model_id: string | null;
+  /** 池自己的能力覆盖（稀疏）：参考成员只提供原值，用户可在其上整维覆盖。 */
+  capability_overrides: CapabilityOverrides | null;
   enabled: boolean;
   members: VideoSourcePoolMember[];
 }
@@ -258,6 +263,8 @@ export interface VideoSourcePoolInput {
   model_name: string | null;
   capability_provider_id: string | null;
   capability_model_id: string | null;
+  /** 池自己的能力覆盖（稀疏）：参考成员只提供原值，用户可在其上整维覆盖。 */
+  capability_overrides?: CapabilityOverrides | null;
   enabled: boolean;
   members: { provider_id: string; model_id: string }[];
 }
@@ -290,3 +297,6 @@ export interface SourcePoolTaskPage {
   page: number;
   page_size: number;
 }
+
+/** 汇总源自己的能力视图（GET /system/source-pools/{id}/capabilities）：形状对齐自定义供应商模型的能力视图。 */
+export type SourcePoolCapabilities = ProviderModelCapabilities;
