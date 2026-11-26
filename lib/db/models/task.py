@@ -33,6 +33,9 @@ class Task(UserOwnedMixin, Base):
     dependency_index: Mapped[int | None] = mapped_column(Integer)
     cancelled_by: Mapped[str | None] = mapped_column(String)
     provider_id: Mapped[str | None] = mapped_column(String)
+    # 任务经哪个汇总源分配（``video_source_pool.id``）。池展开时 ``provider_id`` 被覆盖成真实成员，
+    # 池来源随之丢失，此列补记归属，供监控页按池聚合。单源任务为 NULL。
+    source_pool_id: Mapped[int | None] = mapped_column(Integer)
     provider_job_id: Mapped[str | None] = mapped_column(String)
     # 提交该供应商任务时所用的协议标识（协议维度），只有自定义供应商有这个维度，内置供应商恒 NULL。
     # 与 provider_job_id 同一次写入落地，记录这笔供应商任务按哪套协议提交，供排障时归因。不存请求
@@ -54,6 +57,7 @@ class Task(UserOwnedMixin, Base):
         Index("idx_tasks_project_updated_at", "project_name", "updated_at"),
         Index("idx_tasks_dependency_task_id", "dependency_task_id"),
         Index("idx_tasks_status_provider_queued", "status", "provider_id", "queued_at"),
+        Index("idx_tasks_source_pool_id", "source_pool_id"),
         Index(
             "idx_tasks_dedupe_active",
             "project_name",

@@ -19,7 +19,7 @@ from tests.fakes import refuse_resume_execution
 class _PoolQueue:
     def __init__(self, tasks: list[dict[str, Any]]) -> None:
         self._tasks = list(tasks)
-        self.pinned: list[tuple[str, str, str]] = []
+        self.pinned: list[tuple[str, str, str, int]] = []
         self.requeued: list[str] = []
         self.failed: list[str] = []
         self.claimed: list[str] = []
@@ -41,8 +41,10 @@ class _PoolQueue:
             return task
         return None
 
-    async def pin_pool_execution_identity(self, task_id: str, *, provider_id: str, model_id: str) -> None:
-        self.pinned.append((task_id, provider_id, model_id))
+    async def pin_pool_execution_identity(
+        self, task_id: str, *, provider_id: str, model_id: str, source_pool_id: int
+    ) -> None:
+        self.pinned.append((task_id, provider_id, model_id, source_pool_id))
 
     async def persist_execution_provider_id(self, task_id: str, provider_id: str) -> None:
         return None
@@ -98,7 +100,7 @@ async def test_pool_task_expands_to_least_loaded_member_and_pins() -> None:
 
     await worker._claim_tasks()
 
-    assert queue.pinned == [("t1", "custom-5", "m")]
+    assert queue.pinned == [("t1", "custom-5", "m", 1)]
 
 
 @pytest.mark.asyncio

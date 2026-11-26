@@ -17,6 +17,9 @@ from dataclasses import dataclass
 #: 虚拟 provider id 前缀。与内置注册表键、``custom-`` 前缀都不同，避免与真实供应商混淆。
 SOURCE_POOL_PREFIX = "pool-"
 
+#: 汇总源的虚拟 model_id。对外身份是 ``pool-<id>/aggregate``，展示名由池的 ``model_name`` 决定。
+POOL_MODEL_ID = "aggregate"
+
 #: 池成员可用态与多源优先级共用同一套阈值语义（见 ADR 0121）。
 QUOTA_STREAK_THRESHOLD = 2
 NETWORK_STREAK_THRESHOLD = 5

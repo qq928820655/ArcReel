@@ -114,6 +114,7 @@ def _task_to_dict(row: Task) -> dict[str, Any]:
         "dependency_index": row.dependency_index,
         "cancelled_by": row.cancelled_by,
         "provider_id": row.provider_id,
+        "source_pool_id": row.source_pool_id,
         "provider_job_id": row.provider_job_id,
         "provider_endpoint": row.provider_endpoint,
         "submitted_base_url": row.submitted_base_url,
@@ -966,12 +967,16 @@ class TaskRepository(BaseRepository):
         *,
         provider_id: str,
         model_id: str,
+        source_pool_id: int,
     ) -> None:
         """把汇总源展开选定的成员钉进任务：``provider_id`` 列 + payload 的两个桶键。
 
         池任务入队时记录的是虚拟身份 ``pool-<id>``，worker 认领时按容量展开成真实成员。执行侧会剥掉
         payload 里的旧身份、按当前配置重解析——配置指向的仍是池，若不钉住就会解析回池、判漂移、回队。
         故展开时把成员同时写进 ``provider_id``（供池满过滤与槽位归属）与 payload 桶键（供执行侧跳过重解析）。
+
+        ``source_pool_id`` 补记归属：``provider_id`` 被覆盖成真实成员后，池来源随之丢失，监控页据此
+        按池聚合「这条任务经哪个池分配」。只池任务写，单源任务留 NULL。
 
         两个桶键都钉成同一成员：认领时算不出执行侧最终落 i2v 还是 r2v（参考生视频按单元实际参考图分流），
         而池成员选择只按 provider 容量、与桶无关，故同一成员对两桶都成立。执行侧命中任一桶即用该身份。
@@ -989,7 +994,12 @@ class TaskRepository(BaseRepository):
         await self.session.execute(
             update(Task)
             .where(Task.task_id == task_id, Task.status == "queued")
-            .values(provider_id=provider_id, payload_json=_json_dumps(payload), updated_at=now)
+            .values(
+                provider_id=provider_id,
+                source_pool_id=source_pool_id,
+                payload_json=_json_dumps(payload),
+                updated_at=now,
+            )
         )
         await self.session.commit()
 

@@ -27,6 +27,12 @@ class VideoSourcePool(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
+    # 对外展示的统一模型名（候选下拉与默认模型页）；空则回退池名。池的虚拟 model_id 固定为 aggregate，
+    # 展示层不该把池名重复成「池名 · 池名」，用这一列给用户一个可自定的模型名。
+    model_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # 能力参考成员：池是虚拟 provider，能力解析无从收敛，取此成员的能力回填。空则取 position=0 的首个成员。
+    capability_provider_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    capability_model_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(

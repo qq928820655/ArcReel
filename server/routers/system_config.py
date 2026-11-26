@@ -268,7 +268,7 @@ async def _enumerate_candidates(
     # 汇总源作为视频候选追加：对外是一个虚拟 provider ``pool-<id>``、模型名为「汇总源」或用户命名。
     # 只列启用的池、且至少一个成员，避免选了永远分配不出的空池。一轮内存拼接，不额外扫目录。
     try:
-        from lib.config.source_pool import make_pool_provider_id
+        from lib.config.source_pool import POOL_MODEL_ID, make_pool_provider_id
         from lib.db.repositories.source_pool_repo import SourcePoolRepository
 
         pool_repo = SourcePoolRepository(session)
@@ -280,14 +280,16 @@ async def _enumerate_candidates(
                 continue
             pid = make_pool_provider_id(pool.id)
             provider_names[pid] = pool.name
+            # 虚拟 model_id 固定 aggregate；展示名用用户自定的统一模型名，空则回退池名。
+            # 下拉把「供应商 · 模型」拼起来，两段都取池名会重复，故模型名走 model_name。
             candidates.append(
                 _ModelCandidate(
-                    option=f"{pid}/aggregate",
+                    option=f"{pid}/{POOL_MODEL_ID}",
                     media_type="video",
                     # 汇总源成员都是视频模型，对 i2v/r2v 都可用；桶归属由成员各自能力在执行期判定，
                     # 这里按两桶都不排除（unmet 为空），避免下拉里漏掉池。
                     fit=BucketFit(media_type="video", unmet={}),
-                    display_name=pool.name,
+                    display_name=pool.model_name or pool.name,
                 )
             )
     except Exception:

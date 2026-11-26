@@ -894,7 +894,7 @@ class GenerationWorker:
             # 还有可用成员只是都占满 → 等容量；全不可用 → 也等（次日重置），都保持 queued。
             return None
         await self.queue.pin_pool_execution_identity(
-            task["task_id"], provider_id=chosen.provider_id, model_id=chosen.model_id
+            task["task_id"], provider_id=chosen.provider_id, model_id=chosen.model_id, source_pool_id=pool_id
         )
         expanded = dict(task)
         expanded["provider_id"] = chosen.provider_id

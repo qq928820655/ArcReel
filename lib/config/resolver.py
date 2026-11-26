@@ -1546,6 +1546,24 @@ class ConfigResolver:
         （``docs/adr/0054``）。
         """
         provider_id, model_id = selected.provider_id, selected.model_id
+        # 汇总源：能力取自能力参考成员（内置或自定义都可能），桶能力闸与报错仍以池身份回答。
+        # 参考成员不是池（写入侧不允许池套池），故可安全地按成员身份再走一遍同一套能力求值。
+        if is_source_pool_provider(provider_id):
+            from lib.config.source_pool import parse_pool_provider_id
+            from lib.db.repositories.source_pool_repo import SourcePoolRepository
+
+            pool_id = parse_pool_provider_id(provider_id)
+            reference = await SourcePoolRepository(session).capability_member(pool_id)
+            if reference is None:
+                raise _video_bucket_reference_unavailable(generation_type, provider_id, model_id)
+            try:
+                await self._ensure_video_bucket_capability(
+                    session, ProviderModel(*reference), generation_type
+                )
+            except VideoBucketCapabilityError as exc:
+                # 报错换成池身份：用户引用的是池，报成员身份会指错对象。
+                raise _video_bucket_reference_unavailable(generation_type, provider_id, model_id) from exc
+            return
         model = await self._ensure_video_identity_resolvable(session, selected, generation_type)
         if model is not None:
             # 延迟导入：分层契约（pyproject.toml [tool.importlinter]）以 lib.config 为下层，
@@ -1695,6 +1713,20 @@ class ConfigResolver:
             generation_type = video_bucket_for_generation_mode(caps_generation_mode(project))
         effective = await self._resolve_effective_video_provider_model(session, ProviderModel(provider_id, model_id))
         provider_id, model_id = effective.provider_id, effective.model_id
+        # 汇总源是虚拟 provider：它自身没有能力声明，取「能力参考成员」的能力回填（显式配置优先，
+        # 否则 position=0 首个成员）。对外仍以池身份回答，调用方据此核对引用未漂移；能力值来自参考成员。
+        if is_source_pool_provider(provider_id):
+            from lib.config.source_pool import parse_pool_provider_id
+            from lib.db.repositories.source_pool_repo import SourcePoolRepository
+
+            pool_id = parse_pool_provider_id(provider_id)
+            reference = await SourcePoolRepository(session).capability_member(pool_id)
+            if reference is None:
+                raise ValueError(f"source pool {provider_id} has no members to derive capabilities from")
+            identity_provider_id, identity_model_id = provider_id, model_id
+            provider_id, model_id = reference
+        else:
+            identity_provider_id, identity_model_id = provider_id, model_id
         if is_custom_provider(provider_id):
             # 延迟导入：分层契约（pyproject.toml [tool.importlinter]）以 lib.config 为下层，
             # 而该符号所在的装配层反过来依赖 lib.config，模块级导入会成环；注册表分支不用它，
@@ -1851,8 +1883,9 @@ class ConfigResolver:
         )
 
         return {
-            "provider_id": provider_id,
-            "model": model_id,
+            # 对外身份用池自身（``pool-<id>``），能力值取自参考成员：调用方按此核对引用未漂移。
+            "provider_id": identity_provider_id,
+            "model": identity_model_id,
             "supported_durations": supported_durations,
             "max_duration": max_duration,
             "max_reference_images": max_reference_images,

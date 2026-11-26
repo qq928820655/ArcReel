@@ -727,10 +727,14 @@ class GenerationQueue:
         async with self._task_repo() as repo:
             await repo.persist_execution_provider_id(task_id, provider_id)
 
-    async def pin_pool_execution_identity(self, task_id: str, *, provider_id: str, model_id: str) -> None:
+    async def pin_pool_execution_identity(
+        self, task_id: str, *, provider_id: str, model_id: str, source_pool_id: int
+    ) -> None:
         """汇总源展开后钉住选定成员：``provider_id`` 列 + payload 桶键，供执行侧跳过重解析。"""
         async with self._task_repo() as repo:
-            await repo.pin_pool_execution_identity(task_id, provider_id=provider_id, model_id=model_id)
+            await repo.pin_pool_execution_identity(
+                task_id, provider_id=provider_id, model_id=model_id, source_pool_id=source_pool_id
+            )
 
     async def mark_task_succeeded(self, task_id: str, result: dict[str, Any] | None) -> int:
         """Returns rows_affected (0 = 任务已不在 running，该写入不生效)."""
