@@ -218,12 +218,12 @@ export function SourcePoolSection() {
             <div className="flex flex-col gap-2">
               <div className="text-xs font-medium text-muted-foreground">{t("source_pool_members_label")}</div>
               {draft.rows.map((row, index) => (
-                // 窄屏下三个图标按钮各有 44px 触控区，若与下拉挤一行会把下拉压到很窄。
-                // flex-wrap + 下拉最小基准宽：放不下时按钮整组换到下一行右对齐，下拉独占整行；
-                // 宽屏仍排一行。
-                <div key={index} className="flex flex-wrap items-center gap-2">
+                // 三个图标按钮同一行右侧、整体只占约四分之一：下拉 flex-1 吃满其余宽度。
+                // 移动端全局规则把所有按钮抬到 44px 触控区（无 layer 的裸 CSS，普通 utility 盖不住），
+                // 这里用 icon-sm + min-w-0!/min-h-0! 显式压回紧凑尺寸，避免把下拉挤窄。
+                <div key={index} className="flex items-center gap-2">
                   <span className="w-5 shrink-0 text-center text-xs text-muted-foreground">{index + 1}</span>
-                  <div className="min-w-0 grow basis-44">
+                  <div className="min-w-0 flex-1">
                     <ProviderModelSelect
                       value={row.pair}
                       options={options}
@@ -239,10 +239,11 @@ export function SourcePoolSection() {
                       aria-label={`${t("source_pool_members_label")} ${index + 1}`}
                     />
                   </div>
-                  <div className="ml-auto flex items-center gap-1">
+                  <div className="flex shrink-0 items-center gap-1">
                     <Button
                       variant="ghost"
-                      size="icon"
+                      size="icon-sm"
+                      className="min-w-0! min-h-0!"
                       aria-label={t("source_pool_move_up")}
                       disabled={index === 0}
                       onClick={() =>
@@ -257,7 +258,8 @@ export function SourcePoolSection() {
                     </Button>
                     <Button
                       variant="ghost"
-                      size="icon"
+                      size="icon-sm"
+                      className="min-w-0! min-h-0!"
                       aria-label={t("source_pool_move_down")}
                       disabled={index === draft.rows.length - 1}
                       onClick={() =>
@@ -272,7 +274,8 @@ export function SourcePoolSection() {
                     </Button>
                     <Button
                       variant="ghost"
-                      size="icon"
+                      size="icon-sm"
+                      className="min-w-0! min-h-0!"
                       aria-label={t("source_pool_remove_member")}
                       disabled={draft.rows.length === 1}
                       onClick={() =>
