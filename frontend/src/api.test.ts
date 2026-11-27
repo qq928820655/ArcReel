@@ -433,7 +433,6 @@ describe("API", () => {
       await API.listProjects();
       await API.createProject({ title: "Demo", generation_mode: "storyboard" });
       await API.createProject({ title: "Untitled", generation_mode: "reference_video" });
-      await API.getProject("a b");
       await API.updateProject("demo", { style: "Anime" });
       await API.deleteProject("demo");
 
@@ -494,7 +493,6 @@ describe("API", () => {
         method: "POST",
         body: JSON.stringify({ title: "Untitled", generation_mode: "reference_video" }),
       });
-      expect(requestSpy).toHaveBeenCalledWith("/projects/a%20b", { signal: undefined });
       expect(requestSpy).toHaveBeenCalledWith("/projects/demo", {
         method: "PATCH",
         body: JSON.stringify({ style: "Anime" }),
@@ -1659,6 +1657,20 @@ describe("API.referenceVideos", () => {
     await API.getCostEstimate("proj");
 
     expect(fetchMock.mock.calls[0]![0]).toMatch(/\/cost-estimate$/);
+  });
+
+  it("getProject and getCostEstimate use the slow timeout path", async () => {
+    const slowSpy = vi
+      .spyOn(API, "requestSlow")
+      .mockResolvedValue({ success: true } as never);
+
+    await API.getProject("a b");
+    await API.getCostEstimate("proj");
+
+    expect(slowSpy).toHaveBeenCalledWith("/projects/a%20b", { signal: undefined });
+    expect(slowSpy).toHaveBeenCalledWith("/projects/proj/cost-estimate", {
+      signal: undefined,
+    });
   });
 
   it("deleteReferenceVideoUnit returns void on 204", async () => {

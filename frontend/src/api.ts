@@ -713,7 +713,7 @@ class API {
     scripts: Record<string, EpisodeScript>;
     asset_fingerprints?: Record<string, number>;
   }> {
-    return this.request(`/projects/${encodeURIComponent(name)}`, { signal: options.signal });
+    return this.requestSlow(`/projects/${encodeURIComponent(name)}`, { signal: options.signal });
   }
 
   static async updateProject(
@@ -4244,7 +4244,7 @@ class API {
     projectName: string,
     options: { signal?: AbortSignal } = {}
   ): Promise<CostEstimateResponse> {
-    return this.request(`/projects/${encodeURIComponent(projectName)}/cost-estimate`, {
+    return this.requestSlow(`/projects/${encodeURIComponent(projectName)}/cost-estimate`, {
       signal: options.signal,
     });
   }
