@@ -64,6 +64,7 @@ from lib.generation.restart_recovery import InterruptedCallSettler, RestartRecov
 from lib.generation.task_failure import encode_failure
 from lib.generation.task_failure_encoding import encode_task_failure_message
 from lib.generation.video_resume import ResumeExecutor, VideoResumeRunner, fail_task_of_deleted_project
+from lib.infra.memory import release_memory
 from lib.project.project_manager import get_project_manager
 from lib.project.task_project_claim import TaskProjectClaim, claim_task_project
 
@@ -995,7 +996,9 @@ class GenerationWorker:
     # ------------------------------------------------------------------
 
     async def _drain_finished_tasks(self) -> None:
+        finished_any = False
         for task_id, finished_task in self._slots.drain_finished():
+            finished_any = True
             # 同步判定取消/异常：drain_finished() 只返回 done() 的 task，无需 await。
             # 不 await 就没有挂起点，自然不会误吞针对 _run_loop 自身的取消信号。
             if finished_task.cancelled():
@@ -1013,6 +1016,11 @@ class GenerationWorker:
                 finished_task.result()
             except Exception:
                 logger.debug("已处理的任务异常已在 _process_task 中记录")
+        if finished_any:
+            # 每个任务收尾后做一次内存卫生：连续渲染等重任务会在常驻进程累积循环引用
+            # 垃圾与空闲 arena，主动 GC + malloc_trim 把不用的内存及时归还 OS，避免 RSS
+            # 只升不降直到 OOM。放线程里跑，GC/trim 的停顿不阻塞事件循环。
+            await asyncio.to_thread(release_memory)
 
     async def _wait_inflight_completion(self) -> None:
         # shutdown：先等重启自愈的 dispatcher 派完最后一批 sub-task，再等所有 active task。
