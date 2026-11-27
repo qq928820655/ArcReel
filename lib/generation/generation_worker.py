@@ -538,6 +538,8 @@ class GenerationWorker:
         self._slots: SlotTable = slots or SlotTable()
         # 汇总源内存视图：初始为空，随第一次 reload_limits 装载；分配路径只读它、不查库。
         self._pools = PoolTable(_members={}, _availability={})
+        # 池表为空时展开会静默失败→回队。限频告警用：记上次告警的 monotonic 时刻，避免每 cycle 刷屏。
+        self._empty_pool_warned_at: float = 0.0
         logger.info("Worker 初始容量表: %s", self._capacity._limits)
         self.lease_ttl = max(1.0, float(TASK_WORKER_LEASE_TTL_SEC))
         self.heartbeat_interval = max(0.5, float(TASK_WORKER_HEARTBEAT_SEC))
@@ -880,6 +882,7 @@ class GenerationWorker:
         pool_id = parse_pool_provider_id(task["provider_id"])
         members = self._pools.members(pool_id)
         if not members:
+            self._warn_empty_pool(task, pool_id)
             return None
         availability = self._pools.availability()
         occupied = {m.provider_id: self._slots.occupied(m.provider_id, media_type) for m in members}
@@ -896,9 +899,41 @@ class GenerationWorker:
         await self.queue.pin_pool_execution_identity(
             task["task_id"], provider_id=chosen.provider_id, model_id=chosen.model_id, source_pool_id=pool_id
         )
+        # 内存字典必须与落库一致：执行入口（generation_tasks.py）读的是内存里的 payload，不是数据库。
+        # 只改 provider_id 而不补 payload 桶键，执行侧 pinned_pool_identity_keys 会拿到空集、把身份剥掉，
+        # 再按项目配置重解析回 pool-1 → 查内置供应商失败。故这里同步写入两个桶键。
+        pair = f"{chosen.provider_id}/{chosen.model_id}"
         expanded = dict(task)
         expanded["provider_id"] = chosen.provider_id
+        expanded["payload"] = {
+            **(expanded.get("payload") or {}),
+            "video_provider_i2v": pair,
+            "video_provider_r2v": pair,
+        }
         return expanded
+
+    def _warn_empty_pool(self, task: dict[str, Any], pool_id: int) -> None:
+        """池表里没有该池的成员时告警（限频 60s）。区分"整表空"与"该池被禁用/删除"。
+
+        整表空几乎总是 ``reload_limits`` 没跑（启动未装载、或加载失败）——任务会静默回队空转，
+        这是最难排查的形态，故单独提示。单池缺失则是该池被禁用或删除了，属配置问题。
+        """
+        now = time.monotonic()
+        if now - self._empty_pool_warned_at < 60.0:
+            return
+        self._empty_pool_warned_at = now
+        if not self._pools.pool_ids():
+            logger.warning(
+                "池任务 %s 无法展开：汇总源池表为空（可能 reload_limits 未执行或加载失败），"
+                "任务将持续回队空转。请确认启动时调用了 reload_limits。",
+                task.get("task_id"),
+            )
+        else:
+            logger.warning(
+                "池任务 %s 无法展开：池 %s 不在已装载的池表中（已禁用或已删除），请检查配置。",
+                task.get("task_id"),
+                make_pool_provider_id(pool_id),
+            )
 
     async def _slot_provider(self, task: dict[str, Any], media_type: str) -> tuple[str, bool]:
         """任务的槽位归属：返回 ``(provider_id, 任务行是否已记录该 provider)``。

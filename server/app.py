@@ -561,6 +561,10 @@ async def lifespan(app: FastAPI):
     logger.info("启动 GenerationWorker...")
     worker = create_generation_worker()
     app.state.generation_worker = worker
+    # 启动即装载容量表与汇总源池表：worker 构造时池表为空，而 reload_limits 是它唯一的填充入口，
+    # 不在这里调用的话，进程重启后所有 pool-<id> 任务会被展开失败→回队→静默空转，永远 queued。
+    # reload_limits 幂等（整体 replace）、失败只告警不抛，且此时 DB 已就绪。
+    await worker.reload_limits()
     await worker.start()
     logger.info("GenerationWorker 已启动")
 

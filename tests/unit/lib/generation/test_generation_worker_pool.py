@@ -171,3 +171,56 @@ async def test_pool_task_never_marked_failed_when_no_member() -> None:
 
     assert queue.failed == []
     assert requeued == ["t1"]
+
+
+@pytest.mark.asyncio
+async def test_pool_expand_syncs_payload_bucket_keys_into_memory_task() -> None:
+    """回归：展开只改 provider_id 而不补 payload 桶键时，执行侧会把身份剥掉、按项目配置重解析回 pool-1。
+
+    执行入口读的是内存 task 的 payload（不是数据库），故展开必须把选定成员的桶键同步进内存字典，
+    同时保留入队时的其它 payload 字段（如 script_file）。
+    """
+    members = (PoolMember(position=0, provider_id="custom-10", model_id="seedance-2.0-mini"),)
+    queue = _PoolQueue([])
+    worker = _pool_worker(queue, PoolTable(_members={1: members}, _availability={}), {"custom-10": 3})
+    task = {
+        "task_id": "t1",
+        "media_type": "video",
+        "provider_id": "pool-1",
+        "payload": {"script_file": "episode_74.json"},
+    }
+
+    expanded = await worker._expand_pool_task(task, "video")
+
+    assert expanded is not None
+    assert expanded["provider_id"] == "custom-10"
+    assert expanded["payload"]["video_provider_i2v"] == "custom-10/seedance-2.0-mini"
+    assert expanded["payload"]["video_provider_r2v"] == "custom-10/seedance-2.0-mini"
+    # 入队时的其它字段不被覆盖
+    assert expanded["payload"]["script_file"] == "episode_74.json"
+
+
+@pytest.mark.asyncio
+async def test_warn_empty_pool_distinguishes_empty_table_from_missing_pool(caplog: pytest.LogCaptureFixture) -> None:
+    """缺口③回归：池表整表为空 vs 单池缺失要给出不同告警，前者提示 reload 未执行。
+
+    整表空是"启动没 reload / 加载失败"的静默故障形态，任务会持续回队空转；单池缺失只是配置问题。
+    """
+    import logging
+
+    caplog.set_level(logging.WARNING)
+
+    # 整表空：任务却是池任务 → 提示 reload 未执行
+    empty_queue = _PoolQueue([])
+    empty_worker = _pool_worker(empty_queue, PoolTable(_members={}, _availability={}), {})
+    empty_worker._warn_empty_pool({"task_id": "t1"}, 1)
+    assert any("池表为空" in r.message for r in caplog.records)
+
+    caplog.clear()
+
+    # 有池但缺该池 → 提示池被禁用/删除，而不是 reload 未执行
+    other = (PoolMember(position=0, provider_id="custom-2", model_id="m"),)
+    partial_worker = _pool_worker(_PoolQueue([]), PoolTable(_members={2: other}, _availability={}), {})
+    partial_worker._warn_empty_pool({"task_id": "t2"}, 1)
+    assert any("不在已装载的池表中" in r.message for r in caplog.records)
+    assert not any("池表为空" in r.message for r in caplog.records)
