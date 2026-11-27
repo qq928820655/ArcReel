@@ -10,7 +10,8 @@ import { useShallow } from "zustand/react/shallow";
 import { API } from "@/api";
 import { TruncatedText } from "@/components/shared/TruncatedText";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { PopoverContent, PopoverDescription, PopoverHeader, PopoverTitle } from "@/components/ui/popover";
+import { PopoverContent } from "@/components/ui/popover";
+import { Dialog, DialogBody, DialogContent } from "@/components/ui/dialog";
 import { useAppStore } from "@/stores/app-store";
 import { isOccupyingStatus, useTasksStore } from "@/stores/tasks-store";
 import { useUsageHeaderStore } from "@/stores/usage-header-store";
@@ -101,13 +102,20 @@ function KpiStrip({ summary }: { summary: UsageSummary | null }) {
 }
 
 /**
- * 顶栏用量入口的悬浮层：左栏本项目进行中的调用、右栏最近已结束的调用，顶部是与入口
- * 按钮同口径的 KPI，底部通往设置页的全量记录。
+ * 使用记录面板的内容本体：不含 Popover / Sheet 外壳，桌面端由 {@link UsagePopover} 套
+ * PopoverContent、移动端由 {@link UsageSheet} 套 SheetContent，共用同一份计算与排版。
+ * 左栏本项目进行中的调用、右栏最近已结束的调用，顶部是与入口按钮同口径的 KPI，
+ * 底部通往设置页的全量记录。
  */
-export function UsagePopover({ projectName }: UsagePopoverProps) {
+export function UsagePanelContent({
+  projectName,
+  open,
+  onClose,
+  layout = "popover",
+}: UsagePopoverProps & { open: boolean; onClose: () => void; layout?: "popover" | "sheet" }) {
   const { t, i18n } = useTranslation("dashboard");
-  const open = useAppStore((s) => s.usagePanelOpen);
-  const setOpen = useAppStore((s) => s.setUsagePanelOpen);
+  const setOpen = onClose;
+  const stacked = layout === "sheet";
 
   const summary = useUsageHeaderStore((s) => s.summary);
   const recent = useUsageHeaderStore((s) => s.recent);
@@ -210,23 +218,22 @@ export function UsagePopover({ projectName }: UsagePopoverProps) {
     <Link
       href={`~${settingsSectionPath("usage", { u_project: projectName })}`}
       className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "w-full")}
-      onClick={() => setOpen(false)}
+      onClick={() => setOpen()}
     >
       {t("usage_view_all_records")}
     </Link>
   );
 
   return (
-    // 宽面板贴着顶栏向下展开；空间不够时不翻到侧面盖住顶栏，而是收矮、两栏内部滚动。
-    <PopoverContent align="end" sideOffset={6} collisionAvoidance={{ side: "none" }} className="w-160">
+    <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2">
-        <PopoverHeader className="min-w-0 flex-1">
-          <PopoverTitle>{t("usage_records_title")}</PopoverTitle>
-          <PopoverDescription>
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5 text-sm">
+          <h3 className="font-medium">{t("usage_records_title")}</h3>
+          <p className="min-w-0 text-muted-foreground">
             <TruncatedText text={projectLabel} />
-          </PopoverDescription>
-        </PopoverHeader>
-        <Button variant="ghost" size="icon-xs" aria-label={t("usage_close_panel")} onClick={() => setOpen(false)}>
+          </p>
+        </div>
+        <Button variant="ghost" size="icon-xs" aria-label={t("usage_close_panel")} onClick={() => setOpen()}>
           <X aria-hidden="true" />
         </Button>
       </div>
@@ -246,9 +253,13 @@ export function UsagePopover({ projectName }: UsagePopoverProps) {
       ) : (
         <>
           <KpiStrip summary={summary} />
-          {/* 两栏各自滚动；高度上限让短窗口下的面板仍落在视口内 */}
-          <div className="flex max-h-96 min-h-0">
-            <section aria-label={t("usage_in_progress")} className="flex w-72 shrink-0 flex-col border-r border-border">
+          {/* 桌面两栏各自滚动、高度封顶落在视口内；移动抽屉改成上下堆叠、全宽，
+              否则固定宽左栏 + flex-1 右栏在窄屏会把「最近已结束」压成竖排单字。 */}
+          <div className={cn("min-h-0", stacked ? "flex flex-col gap-3" : "flex max-h-96")}>
+            <section
+              aria-label={t("usage_in_progress")}
+              className={cn("flex flex-col", stacked ? "w-full" : "w-72 shrink-0 border-r border-border")}
+            >
               <div className="flex items-center gap-2 px-2 py-1.5">
                 <h4 className="text-xs font-medium text-muted-foreground">{t("usage_in_progress")}</h4>
                 <span className="num text-xs text-muted-foreground">{activeRows.length}</span>
@@ -264,7 +275,7 @@ export function UsagePopover({ projectName }: UsagePopoverProps) {
                   </Button>
                 )}
               </div>
-              <div className="relative min-h-0 flex-1 overflow-y-auto">
+              <div className={cn(stacked ? "" : "relative min-h-0 flex-1 overflow-y-auto")}>
                 {activeRows.length === 0 ? (
                   <p className="px-2 pb-2 text-xs text-muted-foreground">{t("usage_no_in_progress")}</p>
                 ) : (
@@ -282,11 +293,14 @@ export function UsagePopover({ projectName }: UsagePopoverProps) {
               </div>
             </section>
 
-            <section aria-label={t("usage_recently_finished")} className="flex min-w-0 flex-1 flex-col">
+            <section
+              aria-label={t("usage_recently_finished")}
+              className={cn("flex flex-col", stacked ? "w-full" : "min-w-0 flex-1")}
+            >
               <div className="px-2 py-1.5">
                 <h4 className="text-xs font-medium text-muted-foreground">{t("usage_recently_finished")}</h4>
               </div>
-              <div className="relative min-h-0 flex-1 overflow-y-auto">
+              <div className={cn(stacked ? "" : "relative min-h-0 flex-1 overflow-y-auto")}>
                 {finishedRows.length === 0 ? (
                   <p className="px-2 pb-2 text-xs text-muted-foreground">{t("usage_no_finished")}</p>
                 ) : (
@@ -340,7 +354,39 @@ export function UsagePopover({ projectName }: UsagePopoverProps) {
           onClose={closeDetail}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * 桌面端顶栏用量入口的悬浮层：把 {@link UsagePanelContent} 套进贴着顶栏向下展开的 Popover。
+ * 空间不够时不翻到侧面盖住顶栏，而是收矮、两栏内部滚动。
+ */
+export function UsagePopover({ projectName }: UsagePopoverProps) {
+  const open = useAppStore((s) => s.usagePanelOpen);
+  const setOpen = useAppStore((s) => s.setUsagePanelOpen);
+  return (
+    <PopoverContent align="end" sideOffset={6} collisionAvoidance={{ side: "none" }} className="w-160">
+      <UsagePanelContent projectName={projectName} open={open} onClose={() => setOpen(false)} />
     </PopoverContent>
+  );
+}
+
+/**
+ * 移动端用量入口：三点菜单里点「使用记录」打开，全屏覆盖当前页面（关闭即回到原页面）。
+ * 移动档顶栏放不下常驻的费用按钮与悬浮层，故收进菜单 + 全屏对话框；内容上下堆叠、全宽。
+ */
+export function UsageDialog({ projectName }: UsagePopoverProps) {
+  const open = useAppStore((s) => s.usagePanelOpen);
+  const setOpen = useAppStore((s) => s.setUsagePanelOpen);
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogContent size="fullscreen" showCloseButton={false}>
+        <DialogBody>
+          <UsagePanelContent projectName={projectName} open={open} onClose={() => setOpen(false)} layout="sheet" />
+        </DialogBody>
+      </DialogContent>
+    </Dialog>
   );
 }
 

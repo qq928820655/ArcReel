@@ -1,10 +1,11 @@
 import { startTransition, useEffect, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
-import { ChevronLeft, Download, Ellipsis, Library, Loader2, Menu, Settings } from "lucide-react";
+import { Activity, ChevronLeft, Download, Ellipsis, Library, Loader2, Menu, Settings } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "cn";
 import { ROUTE_APP_ASSETS, ROUTE_APP_PROJECTS, ROUTE_APP_SETTINGS, episodeEditViewPath } from "@/app-routes";
 import { UsageHeaderEntry } from "@/components/usage/UsageHeaderEntry";
+import { UsageDialog } from "@/components/usage/UsagePopover";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -180,6 +181,12 @@ export function GlobalHeader() {
               )}
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              {usageProjectName && (
+                <DropdownMenuItem onClick={() => setUsagePanelOpen(true)}>
+                  <Activity aria-hidden />
+                  {t("dashboard:usage_records_title")}
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 disabled={!currentProjectName || exporting || demoMode}
                 onClick={() => currentProjectName && projectExport.open(currentProjectName)}
@@ -246,6 +253,7 @@ export function GlobalHeader() {
         <AgentPanelToggle />
       </div>
       {projectExport.element}
+      {mobile && usageProjectName && <UsageDialog projectName={usageProjectName} />}
     </header>
   );
 }
