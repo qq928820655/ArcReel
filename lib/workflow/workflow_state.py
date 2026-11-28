@@ -484,12 +484,43 @@ def _episodes_summary(episodes: list[EpisodeSummary]) -> EpisodesSummary:
 
 #: verified 摘要缓存的存活时长。仅作兜底：正常情况下文件签名变化即失效，TTL 只负责
 #: 收住「签名没覆盖到的输入被外部改动」这种边角情形，不做正确性担保。
-_SUMMARY_CACHE_TTL_SECONDS = 30.0
+#:
+#: 正确性由签名担保（见 ``_project_signature``，已剪枝 renders 等高频目录），TTL 只用于
+#: 回收长期不访问项目的内存。取 30s 时，用户操作间隔普遍大于它，签名没变也会周期性触发
+#: 一次秒级全量比对（78 集实测 6-7s），详情接口每次点开都要白屏等待；放宽到 10 分钟，
+#: 项目实质变化仍由签名即时失效，无变化期间不再周期性重算。
+_SUMMARY_CACHE_TTL_SECONDS = 600.0
 
-#: 计算项目签名时跳过的目录：成片输出、呈现产物、字幕与版本快照都不参与产物时效判定
-#: （``renders/`` 不在 ``asset_fingerprints`` 的媒体子目录里，快照按版本号定址），
-#: 它们体积最大且生成期间频繁变化，纳入签名会让缓存几乎每次都失效。
-_SIGNATURE_PRUNED_DIRS = frozenset({"renders", "presentations", "subtitles", "versions"})
+#: 计算项目签名时**参与**的顶层目录：产物时效判定只读这些位置的内容
+#: （剧本、草稿、剪辑时间线、源文、备注与全部媒体子目录）。其余目录——尤其是
+#: ``.arcreel``（Agent 记忆 / 任务）、``.cache``、``.claude`` 这类运行时目录——与产物
+#: 时效无关，却会在聊天、轮询时被持续写入。把它们纳入签名会让摘要缓存几乎每句话都失效，
+#: 详情接口随之反复触发 6-7s 全量比对，表现为「聊着聊着整页白屏」。
+_SIGNATURE_DIRS = frozenset(
+    {
+        "scripts",
+        "drafts",
+        "edit_timelines",
+        "source",
+        "notes",
+        "storyboards",
+        "end_frames",
+        "videos",
+        "thumbnails",
+        "characters",
+        "scenes",
+        "props",
+        "products",
+        "grids",
+        "reference_videos",
+        "audio",
+        "bgm",
+    }
+)
+
+#: 计算项目签名时参与的项目根文件：项目本体、产物清单与根媒体文件（如风格参考图）。
+_SIGNATURE_ROOT_FILES = frozenset({".arcreel_artifacts.json", "project.json"})
+_SIGNATURE_ROOT_MEDIA_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".mp4"})
 
 
 @dataclass(frozen=True)
@@ -502,32 +533,49 @@ class _SummaryCacheEntry:
 def _project_signature(project_path: Path) -> tuple[tuple[str, int, int], ...]:
     """项目目录下参与产物时效判定的文件的 ``(相对路径, 大小, mtime_ns)`` 快照。
 
-    覆盖 ``project.json``、产物清单、剧本、草稿、剪辑时间线、源文与全部媒体子目录；
-    跳过 ``_SIGNATURE_PRUNED_DIRS``（见其说明）。只读文件元数据，不读内容，2 千文件的
-    项目实测 40-60ms，远低于一次 verified 比对的秒级开销。目录软链不下探，与
-    ``asset_fingerprints`` 同口径。
+    只扫描 ``_SIGNATURE_DIRS`` 这些与产物时效相关的目录，加项目根下的
+    ``_SIGNATURE_ROOT_FILES`` 与根媒体文件，以及 ``versions/versions.json``。运行时目录
+    （``.arcreel`` / ``.cache`` / ``.claude`` 等）与 IDE 配置不在其列——它们与产物时效无关，
+    却会在聊天、轮询时被持续写入；纳入签名会让摘要缓存频繁失效，详情接口反复触发全量比对。
+    只读文件元数据，不读内容，目录软链不下探，与 ``asset_fingerprints`` 同口径。
     """
 
     parts: list[tuple[str, int, int]] = []
-    for dirpath, dirnames, filenames in os.walk(project_path, followlinks=False):
-        if Path(dirpath) == project_path:
-            dirnames[:] = [name for name in dirnames if name not in _SIGNATURE_PRUNED_DIRS]
-        dirnames.sort()
-        for filename in sorted(filenames):
-            full = os.path.join(dirpath, filename)
-            try:
-                stat = os.lstat(full)
-            except OSError:
-                continue
-            parts.append((os.path.relpath(full, project_path), stat.st_size, stat.st_mtime_ns))
-    # 版本元数据影响产物时效（快照按版本号定址），但目录本身在剪枝集里，单独取这一个文件。
-    versions_json = project_path / "versions" / "versions.json"
+
+    def _add(relpath: str, full: str) -> None:
+        try:
+            stat = os.lstat(full)
+        except OSError:
+            return
+        parts.append((relpath, stat.st_size, stat.st_mtime_ns))
+
+    # 根文件：项目本体、产物清单与根媒体文件
     try:
-        stat = versions_json.stat()
+        root_entries = list(project_path.iterdir())
     except OSError:
-        pass
-    else:
-        parts.append((os.path.join("versions", "versions.json"), stat.st_size, stat.st_mtime_ns))
+        root_entries = []
+    for entry in root_entries:
+        if not entry.is_file() or entry.is_symlink():
+            continue
+        name = entry.name
+        if name in _SIGNATURE_ROOT_FILES or entry.suffix.lower() in _SIGNATURE_ROOT_MEDIA_SUFFIXES:
+            _add(name, str(entry))
+
+    # 与产物时效相关的目录：只下探这些子树
+    for subdir in sorted(_SIGNATURE_DIRS):
+        dir_path = project_path / subdir
+        if not dir_path.is_dir() or dir_path.is_symlink():
+            continue
+        for dirpath, dirnames, filenames in os.walk(dir_path, followlinks=False):
+            dirnames.sort()
+            for filename in sorted(filenames):
+                full = os.path.join(dirpath, filename)
+                _add(os.path.relpath(full, project_path), full)
+
+    # 版本元数据影响产物时效（快照按版本号定址），单独取这一个文件。
+    versions_json = project_path / "versions" / "versions.json"
+    _add(os.path.join("versions", "versions.json"), str(versions_json))
+
     return tuple(parts)
 
 

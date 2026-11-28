@@ -1027,6 +1027,38 @@ def test_verified_summary_cache_is_invalidated_by_project_changes(tmp_path: Path
     assert after.episodes_summary.completed == 1
 
 
+def test_verified_summary_cache_survives_runtime_dir_writes(tmp_path: Path) -> None:
+    """聊天 / 任务写 ``.arcreel`` 等运行时目录不应让 verified 摘要缓存失效。
+
+    这些目录与产物时效无关，却会在 Agent 对话期间被持续写入。若纳入项目签名，摘要缓存
+    会随每句话失效，详情接口反复触发 6-7s 全量比对，表现为「聊着聊着整页白屏」。
+    """
+
+    pm, project_path = _make_project(tmp_path, "narration")
+    source_text = "完整原文"
+    _write_source(pm, project_path, source_text)
+    _episode_with_media(pm, project_path, source_text)
+    service = WorkflowStateService(pm)
+    WorkflowStateService.reset_summary_cache_for_tests()
+
+    first = service.get_project_summary("demo")
+
+    # 模拟 Agent 在对话中写记忆与任务记录
+    memory_dir = project_path / ".arcreel" / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    (memory_dir / "chat-note.md").write_text("记一笔", encoding="utf-8")
+    (project_path / ".cache").mkdir(exist_ok=True)
+    (project_path / ".cache" / "blob.bin").write_bytes(b"x")
+
+    # 写运行时目录后签名未变，第二次直接命中缓存、结果一致
+    with WorkflowStateService._summary_cache_lock:
+        cached_before = dict(WorkflowStateService._summary_cache)
+    second = service.get_project_summary("demo")
+    assert second.model_dump() == first.model_dump()
+    with WorkflowStateService._summary_cache_lock:
+        assert WorkflowStateService._summary_cache == cached_before
+
+
 def test_registered_summary_bypasses_the_verified_cache(tmp_path: Path) -> None:
     """``registered`` 不写也不读 verified 缓存：两者口径不同，不能互相顶替。"""
 
