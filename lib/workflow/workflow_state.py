@@ -530,6 +530,13 @@ class _SummaryCacheEntry:
     stored_at: float
 
 
+@dataclass(frozen=True)
+class _StatusCacheEntry:
+    signature: tuple[tuple[str, int, int], ...]
+    status: WorkflowStatus
+    stored_at: float
+
+
 def _project_signature(project_path: Path) -> tuple[tuple[str, int, int], ...]:
     """项目目录下参与产物时效判定的文件的 ``(相对路径, 大小, mtime_ns)`` 快照。
 
@@ -587,14 +594,22 @@ class WorkflowStateService:
     _summary_cache: ClassVar[dict[str, _SummaryCacheEntry]] = {}
     _summary_cache_lock: ClassVar[threading.Lock] = threading.Lock()
 
+    #: 制作状态缓存：键为 ``(项目路径, 集号)``，同样按项目签名失效。``get_status`` 是全量
+    #: verified 比对（78 集实测 6-25s），详情页每随项目快照与任务变化就重取一次，不缓存会
+    #: 把事件循环与线程池压满、拖垮其余接口。签名担保正确性，TTL 只用于回收内存。
+    _status_cache: ClassVar[dict[tuple[str, int | None], _StatusCacheEntry]] = {}
+    _status_cache_lock: ClassVar[threading.Lock] = threading.Lock()
+
     def __init__(self, project_manager: ProjectManager):
         self.pm = project_manager
 
     @classmethod
     def reset_summary_cache_for_tests(cls) -> None:
-        """测试隔离用：清空摘要缓存，不改变生产行为。"""
+        """测试隔离用：清空摘要与状态缓存，不改变生产行为。"""
         with cls._summary_cache_lock:
             cls._summary_cache.clear()
+        with cls._status_cache_lock:
+            cls._status_cache.clear()
 
     @staticmethod
     def _artifact_state(
@@ -911,7 +926,30 @@ class WorkflowStateService:
         return collection
 
     def get_status(self, project_name: str, episode: int | None = None) -> WorkflowStatus:
+        """项目制作状态；按项目签名缓存，未变化时直接复用。
+
+        签名只读文件元数据、已剪枝运行时目录（见 ``_project_signature``），项目实质变化时
+        立即失效；无变化期间复用，避免详情页随每次快照 / 任务变化都触发 6-25s 全量比对。
+        迁移失败、项目数据不可读等分支同样缓存——它们同样是签名的确定函数。
+        """
         project_path = self.pm.get_project_path(project_name)
+        cache_key = (str(project_path.resolve()), episode)
+        signature = _project_signature(project_path)
+        now = time.monotonic()
+        with self._status_cache_lock:
+            cached = self._status_cache.get(cache_key)
+            if (
+                cached is not None
+                and cached.signature == signature
+                and now - cached.stored_at < _SUMMARY_CACHE_TTL_SECONDS
+            ):
+                return cached.status.model_copy(deep=True)
+        status = self._compute_status(project_name, project_path, episode)
+        with self._status_cache_lock:
+            self._status_cache[cache_key] = _StatusCacheEntry(signature=signature, status=status, stored_at=now)
+        return status.model_copy(deep=True)
+
+    def _compute_status(self, project_name: str, project_path: Path, episode: int | None) -> WorkflowStatus:
         try:
             project: Any = self.pm.load_project(project_name)
             if not isinstance(project, dict):
