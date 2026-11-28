@@ -101,6 +101,7 @@ describe("UsagePopover event-driven refresh", () => {
         projectName: HEADER_PROJECT,
         statuses: ["success", "failed", "cancelled"],
         limit: 10,
+        order: "finished",
       },
       expect.anything(),
     );

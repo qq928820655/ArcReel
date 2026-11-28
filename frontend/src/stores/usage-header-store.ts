@@ -95,7 +95,7 @@ export const useUsageHeaderStore = create<UsageHeaderState>((set, get) => {
     const [summary, recent, pending] = await Promise.all([
       API.getUsageSummary({ projectName }, { signal }).catch(() => null),
       API.getUsageRecords(
-        { projectName, statuses: FINISHED_STATUSES, limit: HEADER_RECENT_LIMIT },
+        { projectName, statuses: FINISHED_STATUSES, limit: HEADER_RECENT_LIMIT, order: "finished" },
         { signal },
       ).catch(() => null),
       API.getUsageRecords({ projectName, statuses: ["pending"] }, { signal }).catch(() => null),

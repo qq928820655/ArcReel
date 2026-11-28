@@ -170,6 +170,8 @@ export interface UsageRecordsQuery {
   cursor?: string;
   /** 视图；缺省为「生成调用」，不含 Agent 记录。 */
   view?: "generation" | "agent";
+  /** 排序口径：started 按开始时刻（默认，支持游标翻页）；finished 按完成时刻（只取最近 N 条）。 */
+  order?: "started" | "finished";
 }
 
 /** {@link API.getUsageSessions} 的筛选：与记录列表同口径，不含状态、媒体类型与分镜。 */

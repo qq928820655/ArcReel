@@ -167,6 +167,10 @@ async def list_usage_records(
     limit: int = Query(20, ge=1, le=200, description="每页记录数"),
     cursor: str | None = Query(None, description="上一页返回的不透明游标"),
     view: UsageView = Query("generation", description=_VIEW_DESCRIPTION),
+    order: Literal["started", "finished"] = Query(
+        "started",
+        description="排序口径：started 按开始时刻（默认，支持游标翻页）；finished 按完成时刻（只取最近 N 条，不支持游标）",
+    ),
 ) -> UsageRecordPage:
     try:
         decoded = UsageCursor.decode(cursor) if cursor else None
@@ -188,6 +192,7 @@ async def list_usage_records(
             segment_ids=_multi(segment_id),
             limit=limit,
             cursor=decoded,
+            order_by_finished=order == "finished",
         )
     page["items"] = await asyncio.to_thread(_present_records, page["items"], _t)
     return UsageRecordPage.model_validate(page)

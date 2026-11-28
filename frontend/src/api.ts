@@ -3416,6 +3416,7 @@ class API {
     if (query.limit !== undefined) params.append("limit", String(query.limit));
     if (query.cursor) params.append("cursor", query.cursor);
     if (query.view) params.append("view", query.view);
+    if (query.order) params.append("order", query.order);
     const search = params.toString();
     return this.request(`/usage/records${search ? "?" + search : ""}`, {
       signal: options.signal,

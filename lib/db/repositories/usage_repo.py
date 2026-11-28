@@ -758,8 +758,15 @@ class UsageRepository(BaseRepository):
         segment_ids: tuple[str, ...] = (),
         limit: int = 20,
         cursor: UsageCursor | None = None,
+        order_by_finished: bool = False,
     ) -> dict[str, Any]:
-        """按 ``started_at DESC, id DESC`` 取一页使用记录。
+        """取一页使用记录。
+
+        默认按 ``started_at DESC, id DESC``（调用时间线视角，配合 keyset 游标翻页）。
+        ``order_by_finished=True`` 时改按 ``finished_at DESC, id DESC``：给「最近已结束」
+        这类只看完成先后的列表用——长耗时调用（视频任务）的 ``started_at`` 早、``finished_at``
+        晚，按开始时刻排会把它挤到列表中部甚至分页外，用户刚看它完成却在列表里找不到。
+        该模式不支持游标（只取最近的固定条数），传 ``cursor`` 会被忽略。
 
         返回 ``{"items", "next_cursor", "total"}``：``total`` 是筛选后的总数、不随游标变化，
         ``next_cursor`` 为 ``None`` 表示已到末页。``task_type`` 经 ``task_id`` 外连 ``tasks``
@@ -771,6 +778,21 @@ class UsageRepository(BaseRepository):
         total = (await self.session.execute(count_stmt)).scalar() or 0
 
         page_clauses = [*clauses]
+        if order_by_finished:
+            items_stmt = (
+                select(ApiCall, Task.task_type)
+                .outerjoin(Task, Task.task_id == ApiCall.task_id)
+                .where(*page_clauses)
+                .order_by(ApiCall.finished_at.desc(), ApiCall.id.desc())
+                .limit(limit)
+            )
+            rows = (await self.session.execute(self._scope_query(items_stmt, ApiCall))).all()
+            return {
+                "items": [_record_to_dict(row, task_type) for row, task_type in rows],
+                "next_cursor": None,
+                "total": total,
+            }
+
         if cursor is not None:
             page_clauses.append(
                 or_(

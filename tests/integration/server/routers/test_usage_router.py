@@ -37,6 +37,30 @@ def make_call(**overrides) -> ApiCall:
 
 
 @pytest.fixture
+async def finished_order_client(db_factory, usage_app):
+    """两条终态记录：长任务早开始晚完成，短任务晚开始早完成。"""
+    async with db_factory() as session:
+        session.add_all(
+            [
+                # 长任务：12:00 开始，14:30 完成
+                make_call(
+                    segment_id="long",
+                    started_at=BASE_TIME,
+                    finished_at=BASE_TIME + timedelta(minutes=150),
+                ),
+                # 短任务：14:20 开始，14:21 完成
+                make_call(
+                    segment_id="short",
+                    started_at=BASE_TIME + timedelta(minutes=140),
+                    finished_at=BASE_TIME + timedelta(minutes=141),
+                ),
+            ]
+        )
+        await session.commit()
+    return TestClient(usage_app(db_factory))
+
+
+@pytest.fixture
 async def records_client(db_factory, usage_app):
     """五条终态记录 + 一条被任务代表的 pending + 一条无任务的 pending。"""
     async with db_factory() as session:
@@ -201,6 +225,22 @@ class TestUsageRecordsList:
 
         assert len(body["items"]) == 1
         assert body["total"] == 5
+
+    def test_order_finished_puts_long_task_on_top(self, finished_order_client):
+        """``order=finished`` 按完成时刻排序，早开始晚完成的长任务排在顶部。
+
+        默认的 ``started_at`` 排序会把它排到后来短任务的下面，用户刚看它完成却在
+        「最近已结束」里找不到。
+        """
+        by_started = finished_order_client.get("/api/v1/usage/records?status=success").json()["items"]
+        by_finished = finished_order_client.get(
+            "/api/v1/usage/records?status=success&order=finished"
+        ).json()
+
+        assert [item["segment_id"] for item in by_started][:2] == ["short", "long"]
+        assert [item["segment_id"] for item in by_finished["items"]][:2] == ["long", "short"]
+        # finished 排序只取最近 N 条，不提供游标翻页
+        assert by_finished["next_cursor"] is None
 
     @pytest.mark.parametrize("limit", [0, 201])
     def test_limit_outside_bounds_rejected(self, records_client, limit):
